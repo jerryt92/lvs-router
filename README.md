@@ -2,7 +2,7 @@
 
 本项目提供了一个基于 Docker Compose 的三节点路由器部署方案。底层采用 **LVS-DR（直接路由）** 模式，结合 **Keepalived** 实现高可用与流量调度。
 
-为了支持从局域网内其他物理设备直接访问 LVS 的 VIP，LB 使用 **host 网络**；**Keepalived / LVS 配置**在仓库 `keepalived/` 目录下（默认挂载进容器），按需直接编辑配置文件即可。容器会轮询 `keepalived/virtual_server.conf` 并自动同步 IPVS 规则，无需重启容器。
+为了支持从局域网内其他物理设备直接访问 LVS 的 VIP，LB 使用 **host 网络**；**Keepalived / LVS 配置**在仓库 `keepalived/` 目录下（默认挂载进容器），按需直接编辑配置文件即可。Keepalived 通过 `notify_*` 钩子触发 `ipvs-state.sh`，在 VRRP 角色切换时同步 IPVS 规则。
 同时，支持**完全断网（内网隔离环境）下的快速迁移部署**机制。
 
 ## 架构说明
@@ -24,7 +24,7 @@
 3. 等待完成后，你会在目录里发现一个 `lvs-offline-images.tar` 文件。
 
 ### 阶段 2：环境与 Keepalived 配置
-编辑 `.env` 中的 `PARENT_INTERFACE`、`VIP`、`RS1_IP`、`RS2_IP`，并**同步**修改 `keepalived/keepalived.conf`、`lb2.conf`、`lb3.conf` 里的网卡与 VIP，以及 `keepalived/virtual_server.conf` 中的 VIP、RS 与端口（当前 compose 不把这些注入容器，以 `keepalived/` 文件为运行时生效配置）。
+编辑 `.env` 中的 `PARENT_INTERFACE`、`VIP`、`RS1_IP`、`RS2_IP`，并**同步**修改 `lb1/keepalived.conf`、`lb2/keepalived.conf`、`lb3/keepalived.conf` 里的网卡与 VIP，以及 `keepalived/virtual_server.conf` 中的 VIP、RS 与端口（当前 compose 不把这些注入容器，以 `keepalived/` 文件为运行时生效配置）。
 
 ### 阶段 3：传输至目标隔离机器并启动服务
 将包含修改好的 `docker-compose.yml`、`.env`、`keepalived/` 目录以及你打好的 `lvs-offline-images.tar` 项目文件夹丢进你的离线目标 Linux (如 Ubuntu 虚拟机) 服务器内。
@@ -54,6 +54,27 @@ docker compose exec lb1 ip addr show ens18
 docker compose exec lb1 ipvsadm -Ln
 # 应能看到针对 VIP 与业务端口的负载记录（与 keepalived/virtual_server.conf 一致）。
 ```
+
+### 2.1 修改 LVS 虚拟服务配置后的重载方式
+
+运行时使用的 LVS 虚拟服务定义来自 `keepalived/virtual_server.conf`（以只读方式挂载到容器 `/etc/keepalived/virtual_server.conf`）。当前版本**不再在容器内轮询该文件**，而是：
+
+* 当 VRRP 角色发生变化（`MASTER` / `BACKUP` / `FAULT`）时，由 `keepalived.conf` 中的 `notify_*` 钩子调用 `ipvs-state.sh`；
+* `ipvs-state.sh` 会读取最新的 `virtual_server.conf`，并根据当前本机是否真正持有 VIP，决定是创建/更新 IPVS 规则，还是清理掉原有规则。
+
+因此，**修改 LVS 虚拟服务配置后的推荐重载姿势是：**
+
+1. 在宿主机上直接编辑仓库里的 `keepalived/virtual_server.conf`（确保最终内容同步到所有 LB 节点）。
+2. 在期望生效的 LB 节点上，通过让 VRRP 发生一次角色切换来触发重载：
+   * 最简单的方式是在当前 `MASTER` 所在机器执行：
+     ```bash
+     # 以 lb1 为例：停止当前 MASTER 上的 keepalived / 容器
+     docker compose stop lb1
+     ```
+   * 此时 VIP 会漂移到优先级更高的 BACKUP（例如 `lb2`），该节点在成为 `MASTER` 时会通过 `notify_master` 调用 `ipvs-state.sh master`，**重新按最新的 `virtual_server.conf` 写入 IPVS**。
+3. 如果你希望仍由原来的节点继续承担流量，可以在新 MASTER 上确认规则无误后，再重新启动原节点容器，让 VRRP 根据优先级自动漂移回去。
+
+> 简单理解：**“改好 `virtual_server.conf` → 通过一次 VRRP 漂移触发 `notify_*` → 新 MASTER 会按新配置重建 IPVS 规则。”** 无需进入容器手工执行 `ipvsadm`。
 
 ### 3. 测试局域网络外部设备直接访问 LVS-DR
 现在只要你的处于同物理交换机/Wi-Fi 网络下的手机或是另一台电脑，直接在地址栏打开或发起：

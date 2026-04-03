@@ -55,7 +55,6 @@ fi
 socat TCP-LISTEN:"$PORT",bind=0.0.0.0,reuseaddr,fork EXEC:"/usr/local/bin/serve-router-id.sh" &
 if [ "${1:-}" = "keepalived" ] && [ "$has_valid_f" -eq 0 ]; then
   /usr/local/bin/ipvs-state.sh backup
-  /usr/local/bin/watch-virtual-server.sh &
   exec keepalived -nl -f "$CONF"
 fi
 exec "$@"
