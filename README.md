@@ -135,6 +135,8 @@ sudo ./scripts/install-host-assets.sh
 ```
 
 安装脚本会提示输入安装目录；直接回车时默认使用 `/opt/lvs-router`。
+随后会自动扫描 `keepalived/` 下现有的 `lb*` 配置目录，并提示选择当前机器的 LB 角色。
+例如输入 `1` 表示 `lb1`，输入 `2` 表示 `lb2`；如果存在 `lb3`、`lb4` 也会一并显示并可直接选择。直接回车时默认优先选择 `lb1`。
 在复制文件前，安装脚本会先检查运行依赖是否已经可用，包括 `keepalived`、`ip`、`ipvsadm`、`socat` 和 `modprobe`。
 如果你使用默认安装目录 `/opt/lvs-router`，安装脚本不会再错误改写成 `/opt/opt/lvs-router`。
 当前模板已启用 `enable_script_security` 并使用 `script_user root`，以允许 `notify_*` 调用本项目脚本。

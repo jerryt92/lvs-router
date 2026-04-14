@@ -3,6 +3,7 @@ set -eu
 
 DEFAULT_INSTALL_ROOT="/opt/lvs-router"
 INSTALL_ROOT_INPUT="${INSTALL_ROOT_INPUT:-}"
+LB_ROLE_INPUT="${LB_ROLE_INPUT:-}"
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
@@ -59,6 +60,69 @@ EOF
 require_commands install cp rm sed mkdir
 check_runtime_dependencies
 
+AVAILABLE_LB_ROLES=""
+for conf in "$REPO_ROOT"/keepalived/lb*/keepalived.conf; do
+  [ -f "$conf" ] || continue
+
+  role_dir="$(basename "$(dirname "$conf")")"
+  AVAILABLE_LB_ROLES="$AVAILABLE_LB_ROLES $role_dir"
+done
+
+AVAILABLE_LB_ROLES="${AVAILABLE_LB_ROLES# }"
+
+if [ -z "$AVAILABLE_LB_ROLES" ]; then
+  echo "No keepalived LB configs found under $REPO_ROOT/keepalived" >&2
+  exit 1
+fi
+
+DEFAULT_LB_ROLE="lb1"
+case " $AVAILABLE_LB_ROLES " in
+  *" $DEFAULT_LB_ROLE "*) ;;
+  *)
+    DEFAULT_LB_ROLE="${AVAILABLE_LB_ROLES%% *}"
+    ;;
+esac
+
+normalize_lb_role() {
+  role_input="$1"
+
+  case "$role_input" in
+    [0-9]*)
+      candidate_role="lb$role_input"
+      ;;
+    lb[0-9]*|LB[0-9]*)
+      candidate_role="$(printf '%s' "$role_input" | tr '[:upper:]' '[:lower:]')"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  case " $AVAILABLE_LB_ROLES " in
+    *" $candidate_role "*)
+      printf '%s' "$candidate_role"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+print_available_lb_roles() {
+  role_index=1
+
+  echo "Available LB roles:" >&2
+  for lb_role in $AVAILABLE_LB_ROLES; do
+    default_marker=""
+    if [ "$lb_role" = "$DEFAULT_LB_ROLE" ]; then
+      default_marker=" (default)"
+    fi
+
+    printf '  %s) %s%s\n' "$role_index" "$lb_role" "$default_marker" >&2
+    role_index=$((role_index + 1))
+  done
+}
+
 if [ -n "$INSTALL_ROOT_INPUT" ]; then
   INSTALL_ROOT="$INSTALL_ROOT_INPUT"
 elif [ -t 0 ]; then
@@ -67,6 +131,28 @@ elif [ -t 0 ]; then
   [ -n "$INSTALL_ROOT" ] || INSTALL_ROOT="$DEFAULT_INSTALL_ROOT"
 else
   INSTALL_ROOT="$DEFAULT_INSTALL_ROOT"
+fi
+
+if [ -n "$LB_ROLE_INPUT" ]; then
+  if ! LB_ROLE="$(normalize_lb_role "$LB_ROLE_INPUT")"; then
+    echo "Invalid LB role: $LB_ROLE_INPUT (available: $AVAILABLE_LB_ROLES)" >&2
+    exit 1
+  fi
+elif [ -t 0 ]; then
+  print_available_lb_roles
+  while :; do
+    printf 'Select LB role [%s]: ' "${DEFAULT_LB_ROLE#lb}" >&2
+    read -r LB_ROLE_SELECTED
+    [ -n "$LB_ROLE_SELECTED" ] || LB_ROLE_SELECTED="${DEFAULT_LB_ROLE#lb}"
+
+    if LB_ROLE="$(normalize_lb_role "$LB_ROLE_SELECTED")"; then
+      break
+    fi
+
+    echo "Invalid selection: $LB_ROLE_SELECTED (available: $AVAILABLE_LB_ROLES)" >&2
+  done
+else
+  LB_ROLE="$DEFAULT_LB_ROLE"
 fi
 
 BIN_DIR="$INSTALL_ROOT/bin"
@@ -113,11 +199,15 @@ cp -R "$REPO_ROOT/keepalived/." "$KEEPALIVED_DIR/"
 install -m 0644 "$REPO_ROOT/lvs-router.env.example" "$ENV_FILE"
 
 sed -i'' "s|$DEFAULT_ROOT_ESCAPED|$ROOT_ESCAPED|g" "$ENV_FILE"
-sed -i'' "s|$DEFAULT_ROOT_ESCAPED|$ROOT_ESCAPED|g" "$KEEPALIVED_DIR/lb1/keepalived.conf"
-sed -i'' "s|$DEFAULT_ROOT_ESCAPED|$ROOT_ESCAPED|g" "$KEEPALIVED_DIR/lb2/keepalived.conf"
+for conf in "$KEEPALIVED_DIR"/lb*/keepalived.conf; do
+  [ -f "$conf" ] || continue
+  sed -i'' "s|$DEFAULT_ROOT_ESCAPED|$ROOT_ESCAPED|g" "$conf"
+done
+sed -i'' "s|^KEEPALIVED_CONF=.*$|KEEPALIVED_CONF=$INSTALL_ROOT/keepalived/$LB_ROLE/keepalived.conf|" "$ENV_FILE"
 
 echo "Installed scripts to $BIN_DIR"
 echo "Installed keepalived configs to $KEEPALIVED_DIR"
 echo "Installed environment file to $ENV_FILE"
+echo "Selected LB role: $LB_ROLE"
 echo "Prepared runtime directory at $RUN_DIR"
 echo "Next: edit $ENV_FILE and run $BIN_DIR/start.sh"
