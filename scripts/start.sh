@@ -6,35 +6,54 @@ INSTALL_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 BIN_DIR="$INSTALL_ROOT/bin"
 LOG_DIR="${ROUTER_LOG_DIR:-$INSTALL_ROOT/logs}"
 RUN_DIR="${ROUTER_RUN_DIR:-$INSTALL_ROOT/run}"
+PID_DIR="$RUN_DIR/pids"
 KEEPALIVED_CONF="${KEEPALIVED_CONF:-$INSTALL_ROOT/keepalived/lb1/keepalived.conf}"
 START_LOG="${START_LOG:-$LOG_DIR/start.log}"
 KEEPALIVED_LOG="${KEEPALIVED_LOG:-$LOG_DIR/keepalived.log}"
 ROUTER_ID_LOG="${ROUTER_ID_LOG:-$LOG_DIR/router-id-server.log}"
-
-router_pid=""
-keepalived_pid=""
+KEEPALIVED_PID_FILE="$PID_DIR/keepalived.pid"
+ROUTER_PID_FILE="$PID_DIR/router-id-server.pid"
 
 log_line() {
   printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >>"$START_LOG"
 }
 
-terminate() {
-  log_line "received stop signal, stopping lvs-router components"
-  if [ -n "$keepalived_pid" ]; then
-    kill "$keepalived_pid" 2>/dev/null || true
+is_running_pid_file() {
+  pid_file="$1"
+  if [ ! -f "$pid_file" ]; then
+    return 1
   fi
-  if [ -n "$router_pid" ]; then
-    kill "$router_pid" 2>/dev/null || true
+
+  pid="$(awk 'NR==1 { print $1 }' "$pid_file" 2>/dev/null || true)"
+  if [ -z "$pid" ]; then
+    rm -f "$pid_file"
+    return 1
   fi
-  wait "${keepalived_pid:-}" 2>/dev/null || true
-  wait "${router_pid:-}" 2>/dev/null || true
-  exit 0
+
+  if kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+
+  rm -f "$pid_file"
+  return 1
 }
 
-mkdir -p "$LOG_DIR" "$RUN_DIR" "$RUN_DIR/ipvs-state"
+mkdir -p "$LOG_DIR" "$RUN_DIR" "$RUN_DIR/ipvs-state" "$PID_DIR"
 touch "$START_LOG" "$KEEPALIVED_LOG" "$ROUTER_ID_LOG"
 
-trap terminate INT TERM HUP
+if is_running_pid_file "$KEEPALIVED_PID_FILE"; then
+  pid="$(awk 'NR==1 { print $1 }' "$KEEPALIVED_PID_FILE" 2>/dev/null || true)"
+  log_line "refusing to start: keepalived already running with pid $pid"
+  echo "keepalived already running with pid $pid" >&2
+  exit 1
+fi
+
+if is_running_pid_file "$ROUTER_PID_FILE"; then
+  pid="$(awk 'NR==1 { print $1 }' "$ROUTER_PID_FILE" 2>/dev/null || true)"
+  log_line "refusing to start: router-id-server already running with pid $pid"
+  echo "router-id-server already running with pid $pid" >&2
+  exit 1
+fi
 
 log_line "starting lvs-router"
 "$BIN_DIR/load-ipvs-modules.sh" >>"$START_LOG" 2>&1
@@ -43,19 +62,43 @@ log_line "starting lvs-router"
 
 "$BIN_DIR/router-id-server.sh" >>"$ROUTER_ID_LOG" 2>&1 &
 router_pid=$!
+printf '%s\n' "$router_pid" >"$ROUTER_PID_FILE"
 log_line "router-id-server started with pid $router_pid"
 
-/usr/sbin/keepalived -nl -f "$KEEPALIVED_CONF" >>"$KEEPALIVED_LOG" 2>&1 &
-keepalived_pid=$!
-log_line "keepalived started with pid $keepalived_pid using $KEEPALIVED_CONF"
-
-wait "$keepalived_pid"
-keepalived_status=$?
-log_line "keepalived exited with status $keepalived_status"
-
-if [ -n "$router_pid" ]; then
-  kill "$router_pid" 2>/dev/null || true
-  wait "$router_pid" 2>/dev/null || true
+KEEPALIVED_BIN="${KEEPALIVED_BIN:-$(command -v keepalived 2>/dev/null || true)}"
+if [ -z "$KEEPALIVED_BIN" ]; then
+  log_line "keepalived binary not found in PATH"
+  rm -f "$ROUTER_PID_FILE"
+  kill -9 "$router_pid" 2>/dev/null || true
+  echo "keepalived binary not found in PATH" >&2
+  exit 1
 fi
 
-exit "$keepalived_status"
+"$KEEPALIVED_BIN" -nl -f "$KEEPALIVED_CONF" >>"$KEEPALIVED_LOG" 2>&1 &
+keepalived_pid=$!
+printf '%s\n' "$keepalived_pid" >"$KEEPALIVED_PID_FILE"
+log_line "keepalived started with pid $keepalived_pid using $KEEPALIVED_CONF"
+
+sleep 1
+
+if ! kill -0 "$router_pid" 2>/dev/null; then
+  log_line "router-id-server exited unexpectedly during startup"
+  rm -f "$ROUTER_PID_FILE"
+  rm -f "$KEEPALIVED_PID_FILE"
+  kill -9 "$keepalived_pid" 2>/dev/null || true
+  echo "router-id-server exited unexpectedly during startup" >&2
+  exit 1
+fi
+
+if ! kill -0 "$keepalived_pid" 2>/dev/null; then
+  log_line "keepalived exited unexpectedly during startup"
+  rm -f "$ROUTER_PID_FILE"
+  rm -f "$KEEPALIVED_PID_FILE"
+  kill -9 "$router_pid" 2>/dev/null || true
+  echo "keepalived exited unexpectedly during startup" >&2
+  exit 1
+fi
+
+log_line "lvs-router started in background"
+printf 'router-id-server pid: %s\n' "$router_pid"
+printf 'keepalived pid: %s\n' "$keepalived_pid"

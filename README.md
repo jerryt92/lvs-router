@@ -20,7 +20,6 @@
 - `keepalived/`：VRRP 和虚拟服务配置
 - `lb/`：LVS 规则同步脚本和健康检查应答脚本
 - `scripts/`：裸机部署新增脚本
-- `systemd/`：裸机部署新增的 systemd 单元
 - `packaging/centos-offline/`：CentOS / RHEL 系离线打包和安装脚本
 - `docs/centos-offline-install.md`：CentOS 完全离线安装说明
 - `docs/script-reference-and-reload.md`：脚本用途与配置热更新说明
@@ -30,7 +29,6 @@
 
 - `/opt/lvs-router/bin`：项目脚本
 - `/opt/lvs-router/keepalived`：Keepalived 与虚拟服务配置
-- `/opt/lvs-router/systemd`：systemd unit 源文件
 - `/opt/lvs-router/lvs-router.env`：环境变量文件
 - `/opt/lvs-router/logs`：统一日志目录
 - `/opt/lvs-router/run`：项目运行时状态目录
@@ -51,8 +49,6 @@
 - `ip_vs_rr`：轮询调度算法模块
 - `ip_vs_wrr`：加权轮询调度算法模块
 - `ip_vs_sh`：源地址哈希调度算法模块
-
-如果你的发行版默认启用了 systemd，本仓库提供的 unit 文件可以直接使用。
 
 ## 部署前配置
 
@@ -128,7 +124,7 @@ sudo dnf install -y keepalived iproute ipvsadm socat kmod
 
 把整个项目目录复制到目标 LB 机器，例如 `/root/lvs-router-src`。
 
-### 3. 安装脚本、配置和 systemd 单元
+### 3. 安装脚本和配置
 
 在项目目录执行：
 
@@ -138,14 +134,12 @@ sudo ./scripts/install-host-assets.sh
 ```
 
 安装脚本会提示输入安装目录；直接回车时默认使用 `/opt/lvs-router`。
-在复制文件前，安装脚本会先检查运行依赖是否已经可用，包括 `keepalived`、`ip`、`ipvsadm`、`socat`、`modprobe` 和 `systemctl`。
+在复制文件前，安装脚本会先检查运行依赖是否已经可用，包括 `keepalived`、`ip`、`ipvsadm`、`socat` 和 `modprobe`。
 
 这一步会完成：
 
 - 将项目脚本安装到安装目录下的 `bin`
 - 将 `keepalived/` 配置复制到安装目录下的 `keepalived`
-- 将 systemd unit 源文件安装到安装目录下的 `systemd`
-- 在 `/etc/systemd/system` 创建指向安装目录中 `lvs-router.service` 的链接
 - 将环境文件样例安装到安装目录下的 `lvs-router.env`
 
 ### 4. 编辑宿主机环境文件
@@ -163,23 +157,32 @@ sudo vi /opt/lvs-router/lvs-router.env
 - `HEALTHY_HTTP_PORT`
 - `IPVS_MODULES`
 
-### 5. 启用并启动服务
+### 5. 手工启动
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable lvs-router.service
-sudo systemctl start lvs-router.service
+sudo /opt/lvs-router/bin/start.sh
 ```
 
-## 服务说明
+脚本会在后台拉起 `router-id-server.sh` 和 `keepalived`，然后立即退出。
 
-### `lvs-router.service`
+启动成功后会在 `/opt/lvs-router/run/pids/` 下生成：
+
+- `keepalived.pid`
+- `router-id-server.pid`
+
+查看状态：
+
+```bash
+sudo /opt/lvs-router/bin/status.sh
+```
+
+## 启动说明
 
 统一由安装目录下的 `bin/start.sh` 拉起所有组件，启动流程如下：
 
-1. 调用安装目录下的 `bin/host-prep.sh`
-2. 调用安装目录下的 `bin/ipvs-state.sh backup`
-3. 调用安装目录下的 `bin/load-ipvs-modules.sh`
+1. 调用安装目录下的 `bin/load-ipvs-modules.sh`
+2. 调用安装目录下的 `bin/host-prep.sh`
+3. 调用安装目录下的 `bin/ipvs-state.sh backup`
 4. 启动安装目录下的 `bin/router-id-server.sh`
 5. 启动 `keepalived -nl -f ${KEEPALIVED_CONF}`
 
@@ -194,7 +197,7 @@ sudo systemctl start lvs-router.service
 ### 1. 检查服务状态
 
 ```bash
-systemctl status lvs-router.service
+sudo /opt/lvs-router/bin/status.sh
 ```
 
 ### 2. 检查 VIP
@@ -237,10 +240,11 @@ curl -v http://<VIP>:<PORT>
 
 ### 修改 `keepalived/lb1/keepalived.conf` 或 `keepalived/lb2/keepalived.conf`
 
-当前的 `systemd/lvs-router.service` 没有定义 `ExecReload`，因此最稳妥的生效方式是直接重启整套服务：
+最稳妥的生效方式是重启整套脚本拉起的进程：
 
 ```bash
-sudo systemctl restart lvs-router.service
+sudo /opt/lvs-router/bin/stop.sh
+sudo /opt/lvs-router/bin/start.sh
 ```
 
 如果只是希望 Keepalived 进程重读配置，也可以向 Keepalived 发送 `HUP` 信号，但这种方式不会重新执行 `host-prep.sh`：
@@ -278,7 +282,7 @@ ipvsadm -Ln
 可以在当前主节点执行：
 
 ```bash
-sudo systemctl stop lvs-router.service
+sudo /opt/lvs-router/bin/stop.sh
 ```
 
 然后在备节点验证：
@@ -294,7 +298,7 @@ curl -s http://<LB_IP>:45555
 停止服务：
 
 ```bash
-sudo systemctl stop lvs-router.service
+sudo /opt/lvs-router/bin/stop.sh
 ```
 
 如果只想清理 IPVS 规则，可执行：
@@ -317,7 +321,7 @@ sudo /opt/lvs-router/bin/stop.sh
 2. 将项目目录复制到目标机器
 3. 离线安装 `keepalived`、`ipvsadm`、`iproute2`、`socat`、`kmod`
 4. 执行 `scripts/install-host-assets.sh`
-5. 启动 `lvs-router.service`
+5. 手工执行 `/opt/lvs-router/bin/start.sh`
 
 如果目标环境是 CentOS / RHEL 系，并且你希望生成一个可搬运的离线依赖包，请优先使用：
 

@@ -9,6 +9,7 @@
 - `lb/ipvs-state.sh`
 - `scripts/router-id-server.sh`
 - `scripts/start.sh`
+- `scripts/status.sh`
 
 安装到目标机器后，这些脚本通常会被复制到 `/opt/lvs-router/bin/` 下运行。
 
@@ -95,6 +96,8 @@
 用途：
 
 - 作为统一启动入口，负责拉起整套 `lvs-router`
+- 启动成功后立即退出，不前台守护进程
+- 将后台进程 PID 写入 `run/pids/`
 
 启动顺序：
 
@@ -104,12 +107,12 @@
 4. 调用 `ipvs-state.sh backup`
 5. 后台启动 `router-id-server.sh`
 6. 后台启动 `keepalived -nl -f "$KEEPALIVED_CONF"`
-7. 监听退出信号，在停止时一起清理子进程
 
 说明：
 
 - 先执行一次 `backup` 是为了避免启动瞬间误保留旧的 IPVS 规则
-- `keepalived` 退出后，脚本会停止 `router-id-server.sh`
+- 会检查 PID 文件，避免重复启动
+- `keepalived` 路径优先从 `PATH` 查找，也可通过 `KEEPALIVED_BIN` 指定
 
 ### `stop.sh`
 
@@ -117,15 +120,28 @@
 
 - 作为统一停止入口，负责清理当前节点的运行状态
 
-支持模式：
-
-- `stop.sh --systemctl`：调用 `systemctl stop lvs-router.service`
-- `stop.sh`：直接执行本地停止流程
-
 本地停止流程会：
 
+- 读取 `run/pids/keepalived.pid` 和 `run/pids/router-id-server.pid`
+- 对 PID 文件中的进程执行 `kill -9`
+- 删除 PID 文件
 - 调用 `ipvs-state.sh stop`
 - 删除 `IPVS_STATE_FILE`
+
+### `status.sh`
+
+用途：
+
+- 查看 `keepalived` 和 `router-id-server` 的 PID 文件状态
+- 如果进程仍存活，输出对应 PID 和命令行
+- 显示日志文件位置
+- 显示当前 `IPVS_STATE_FILE`
+- 输出 `ipvsadm -Ln`，便于排查当前内核 IPVS 规则
+
+典型场景：
+
+- 手工启动后确认进程是否起来
+- 排查 PID 文件残留、进程退出和 IPVS 规则是否生效
 
 ## 配置修改后如何热更新
 
@@ -143,8 +159,6 @@
 - `virtual_ipaddress`
 - `notify_*` 钩子
 
-当前仓库中的 `systemd/lvs-router.service` 没有定义 `ExecReload`，因此不能直接依赖 `systemctl reload lvs-router.service`。
-
 推荐做法分两种：
 
 #### 方案 A：重启整套服务
@@ -152,7 +166,8 @@
 最稳妥，适合多数场景。
 
 ```bash
-sudo systemctl restart lvs-router.service
+sudo /opt/lvs-router/bin/stop.sh
+sudo /opt/lvs-router/bin/start.sh
 ```
 
 特点：
@@ -182,7 +197,7 @@ sudo pkill -HUP keepalived
 ```bash
 ip addr show <你的网卡名>
 ipvsadm -Ln
-journalctl -u lvs-router.service -n 50 --no-pager
+tail -n 50 /opt/lvs-router/logs/keepalived.log
 ```
 
 ### 2. 修改 `keepalived/virtual_server.conf`
@@ -208,7 +223,7 @@ sudo /opt/lvs-router/bin/ipvs-state.sh sync
 - 如果当前节点持有 VIP，就按新配置增删改 IPVS Real Server
 - 如果当前节点已经不是 MASTER，就自动清理本机旧规则
 
-因此，`virtual_server.conf` 修改后通常不需要主备切换，也不一定需要重启整个 `lvs-router.service`。
+因此，`virtual_server.conf` 修改后通常不需要主备切换，也不一定需要重启整套脚本拉起的进程。
 
 同步后建议检查：
 
@@ -221,7 +236,7 @@ curl -s http://<LB_IP>:45555
 
 如果你修改的是 `keepalived.conf`：
 
-- 优先使用 `sudo systemctl restart lvs-router.service`
+- 优先使用 `sudo /opt/lvs-router/bin/stop.sh` 后再执行 `sudo /opt/lvs-router/bin/start.sh`
 - 想尽量少扰动时，再考虑对 Keepalived 发送 `HUP`
 
 如果你修改的是 `virtual_server.conf`：
@@ -231,4 +246,4 @@ curl -s http://<LB_IP>:45555
 
 如果你不确定当前改动属于哪一类：
 
-- 直接重启 `lvs-router.service` 最稳妥
+- 直接执行 `stop.sh` 后再执行 `start.sh` 最稳妥
