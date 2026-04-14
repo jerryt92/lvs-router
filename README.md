@@ -23,6 +23,7 @@
 - `systemd/`：裸机部署新增的 systemd 单元
 - `packaging/centos-offline/`：CentOS / RHEL 系离线打包和安装脚本
 - `docs/centos-offline-install.md`：CentOS 完全离线安装说明
+- `docs/script-reference-and-reload.md`：脚本用途与配置热更新说明
 - `lvs-router.env.example`：宿主机环境变量示例文件
 
 项目安装根目录在安装时输入，默认是 `/opt/lvs-router`。下文中的路径示例都以默认值为例：
@@ -232,34 +233,45 @@ curl -s http://<LB_IP>:45555
 curl -v http://<VIP>:<PORT>
 ```
 
-## 运行时修改虚拟服务配置
+## 运行时修改配置
 
-运行时使用的虚拟服务定义来自安装目录下的 `keepalived/virtual_server.conf`。当前实现不会持续轮询该文件，而是在 VRRP 角色变化时通过 `notify_*` 触发 `ipvs-state.sh`。
+### 修改 `keepalived/lb1/keepalived.conf` 或 `keepalived/lb2/keepalived.conf`
 
-推荐重载方式：
-
-1. 在所有 LB 节点同步更新 `virtual_server.conf`
-2. 让当前 MASTER 发生一次主备切换
-3. 新 MASTER 在成为主节点时自动按新配置重建 IPVS 规则
-
-示例：
+当前的 `systemd/lvs-router.service` 没有定义 `ExecReload`，因此最稳妥的生效方式是直接重启整套服务：
 
 ```bash
 sudo systemctl restart lvs-router.service
 ```
 
-重启后检查：
+如果只是希望 Keepalived 进程重读配置，也可以向 Keepalived 发送 `HUP` 信号，但这种方式不会重新执行 `host-prep.sh`：
+
+```bash
+sudo pkill -HUP keepalived
+```
+
+### 修改 `keepalived/virtual_server.conf`
+
+运行时的 IPVS 配置由 `ipvs-state.sh` 根据 `virtual_server.conf` 读取后写入内核。更新该文件后，不需要一定通过主备切换才能生效。
+
+推荐在当前 MASTER 节点执行：
+
+```bash
+sudo /opt/lvs-router/bin/ipvs-state.sh sync
+```
+
+该命令会：
+
+- 当前节点持有 VIP 时，按新配置同步 IPVS 服务和 Real Server
+- 当前节点不持有 VIP 时，清理本机旧的 IPVS 规则
+
+更新后建议检查：
 
 ```bash
 ip addr show <你的网卡名>
 ipvsadm -Ln
 ```
 
-如果需要通过主节点停机来触发主备漂移，可直接停止统一服务：
-
-```bash
-sudo systemctl stop lvs-router.service
-```
+更完整的脚本说明和热更新建议见 `docs/script-reference-and-reload.md`。
 
 ## 故障切换验证
 
