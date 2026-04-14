@@ -103,16 +103,19 @@
 启动顺序：
 
 1. 创建日志目录和运行目录
-2. 调用 `load-ipvs-modules.sh`
-3. 调用 `host-prep.sh`
-4. 调用 `ipvs-state.sh backup`
-5. 后台启动 `router-id-server.sh`
-6. 后台启动 `keepalived -nl -f "$KEEPALIVED_CONF"`
+2. 执行 `keepalived -t -f "$KEEPALIVED_CONF"` 预检查
+3. 调用 `load-ipvs-modules.sh`
+4. 调用 `host-prep.sh`
+5. 调用 `ipvs-state.sh backup`
+6. 后台启动 `router-id-server.sh`
+7. 后台启动 `keepalived -nl -f "$KEEPALIVED_CONF"`
 
 说明：
 
 - 先执行一次 `backup` 是为了避免启动瞬间误保留旧的 IPVS 规则
 - 会检查 PID 文件，避免重复启动
+- 启动前会先做 `keepalived -t` 校验，失败时直接退出
+- `keepalived.conf` 模板默认已启用 `enable_script_security` 并使用 `script_user root`
 - `keepalived` 路径优先从 `PATH` 查找，也可通过 `KEEPALIVED_BIN` 指定
 
 ### `stop.sh`
@@ -125,6 +128,8 @@
 
 - 读取 `run/pids/keepalived.pid` 和 `run/pids/router-id-server.pid`
 - 对 PID 文件中的进程执行 `kill -9`
+- 兜底清理匹配当前配置的 `keepalived` 残留进程
+- 删除 `/run/keepalived.pid`
 - 删除 PID 文件
 - 调用 `ipvs-state.sh stop`
 - 删除 `IPVS_STATE_FILE`
@@ -134,6 +139,7 @@
 用途：
 
 - 顺序执行 `stop.sh` 和 `start.sh`
+- 在停止和启动之间等待 1 秒，减少 `keepalived` 残留退出中的竞争
 - 用于配置变更后的一键重启
 
 典型场景：

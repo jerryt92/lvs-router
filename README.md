@@ -135,6 +135,8 @@ sudo ./scripts/install-host-assets.sh
 
 安装脚本会提示输入安装目录；直接回车时默认使用 `/opt/lvs-router`。
 在复制文件前，安装脚本会先检查运行依赖是否已经可用，包括 `keepalived`、`ip`、`ipvsadm`、`socat` 和 `modprobe`。
+如果你使用默认安装目录 `/opt/lvs-router`，安装脚本不会再错误改写成 `/opt/opt/lvs-router`。
+当前模板已启用 `enable_script_security` 并使用 `script_user root`，以允许 `notify_*` 调用本项目脚本。
 
 这一步会完成：
 
@@ -164,6 +166,7 @@ sudo /opt/lvs-router/bin/start.sh
 ```
 
 脚本会在后台拉起 `router-id-server.sh` 和 `keepalived`，然后立即退出。
+正式启动前会先执行一次 `keepalived -t -f "$KEEPALIVED_CONF"` 配置校验；校验失败时不会留下半启动状态。
 
 启动成功后会在 `/opt/lvs-router/run/pids/` 下生成：
 
@@ -176,10 +179,24 @@ sudo /opt/lvs-router/bin/start.sh
 sudo /opt/lvs-router/bin/restart.sh
 ```
 
+`restart.sh` 会先执行 `stop.sh` 清理已有进程和 `/run/keepalived.pid`，再重新启动。
+
 查看状态：
 
 ```bash
 sudo /opt/lvs-router/bin/status.sh
+```
+
+如果你的目标机是在这次修复之前安装的，建议重新执行一次安装脚本；否则至少手工检查：
+
+- `/opt/lvs-router/keepalived/lb1/keepalived.conf`
+- `/opt/lvs-router/keepalived/lb2/keepalived.conf`
+
+确认其中没有 `/opt/opt/lvs-router`，并且 `global_defs` 内包含：
+
+```bash
+enable_script_security
+script_user root
 ```
 
 ## 启动说明

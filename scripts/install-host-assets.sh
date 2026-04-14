@@ -94,6 +94,7 @@ escape_replacement() {
 }
 
 ROOT_ESCAPED="$(escape_replacement "$INSTALL_ROOT")"
+DEFAULT_ROOT_ESCAPED="$(escape_replacement "$DEFAULT_INSTALL_ROOT")"
 
 cleanup_previous_install
 
@@ -111,9 +112,9 @@ install -m 0755 "$REPO_ROOT/scripts/stop.sh" "$BIN_DIR/stop.sh"
 cp -R "$REPO_ROOT/keepalived/." "$KEEPALIVED_DIR/"
 install -m 0644 "$REPO_ROOT/lvs-router.env.example" "$ENV_FILE"
 
-sed -i'' "s|/lvs-router|$ROOT_ESCAPED|g" "$ENV_FILE"
-sed -i'' "s|/lvs-router|$ROOT_ESCAPED|g" "$KEEPALIVED_DIR/lb1/keepalived.conf"
-sed -i'' "s|/lvs-router|$ROOT_ESCAPED|g" "$KEEPALIVED_DIR/lb2/keepalived.conf"
+sed -i'' "s|$DEFAULT_ROOT_ESCAPED|$ROOT_ESCAPED|g" "$ENV_FILE"
+sed -i'' "s|$DEFAULT_ROOT_ESCAPED|$ROOT_ESCAPED|g" "$KEEPALIVED_DIR/lb1/keepalived.conf"
+sed -i'' "s|$DEFAULT_ROOT_ESCAPED|$ROOT_ESCAPED|g" "$KEEPALIVED_DIR/lb2/keepalived.conf"
 
 echo "Installed scripts to $BIN_DIR"
 echo "Installed keepalived configs to $KEEPALIVED_DIR"

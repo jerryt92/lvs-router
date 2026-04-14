@@ -55,7 +55,21 @@ if is_running_pid_file "$ROUTER_PID_FILE"; then
   exit 1
 fi
 
+KEEPALIVED_BIN="${KEEPALIVED_BIN:-$(command -v keepalived 2>/dev/null || true)}"
+if [ -z "$KEEPALIVED_BIN" ]; then
+  log_line "keepalived binary not found in PATH"
+  echo "keepalived binary not found in PATH" >&2
+  exit 1
+fi
+
 log_line "starting lvs-router"
+log_line "running keepalived config check: $KEEPALIVED_BIN -t -f $KEEPALIVED_CONF"
+if ! "$KEEPALIVED_BIN" -t -f "$KEEPALIVED_CONF" >>"$KEEPALIVED_LOG" 2>&1; then
+  log_line "keepalived config check failed for $KEEPALIVED_CONF"
+  echo "keepalived config check failed for $KEEPALIVED_CONF" >&2
+  exit 1
+fi
+
 "$BIN_DIR/load-ipvs-modules.sh" >>"$START_LOG" 2>&1
 "$BIN_DIR/host-prep.sh" >>"$START_LOG" 2>&1
 "$BIN_DIR/ipvs-state.sh" backup >>"$START_LOG" 2>&1
@@ -64,15 +78,6 @@ log_line "starting lvs-router"
 router_pid=$!
 printf '%s\n' "$router_pid" >"$ROUTER_PID_FILE"
 log_line "router-id-server started with pid $router_pid"
-
-KEEPALIVED_BIN="${KEEPALIVED_BIN:-$(command -v keepalived 2>/dev/null || true)}"
-if [ -z "$KEEPALIVED_BIN" ]; then
-  log_line "keepalived binary not found in PATH"
-  rm -f "$ROUTER_PID_FILE"
-  kill -9 "$router_pid" 2>/dev/null || true
-  echo "keepalived binary not found in PATH" >&2
-  exit 1
-fi
 
 "$KEEPALIVED_BIN" -nl -f "$KEEPALIVED_CONF" >>"$KEEPALIVED_LOG" 2>&1 &
 keepalived_pid=$!
