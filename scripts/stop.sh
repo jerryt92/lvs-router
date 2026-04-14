@@ -3,6 +3,13 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 INSTALL_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+ENV_FILE="$INSTALL_ROOT/lvs-router.env"
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  . "$ENV_FILE"
+  set +a
+fi
+
 BIN_DIR="$INSTALL_ROOT/bin"
 LOG_DIR="${ROUTER_LOG_DIR:-$INSTALL_ROOT/logs}"
 RUN_DIR="${ROUTER_RUN_DIR:-$INSTALL_ROOT/run}"

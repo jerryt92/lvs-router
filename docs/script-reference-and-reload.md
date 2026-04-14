@@ -13,6 +13,7 @@
 - `scripts/status.sh`
 
 安装到目标机器后，这些脚本通常会被复制到 `/opt/lvs-router/bin/` 下运行。
+`start.sh`、`stop.sh`、`status.sh`、`restart.sh` 默认会自动加载安装目录下的 `lvs-router.env`。
 
 ## 脚本说明
 
@@ -91,6 +92,62 @@
 
 - 由 `keepalived.conf` 中的 `notify_master` / `notify_backup` / `notify_fault` 调用
 - 也可以手工执行 `ipvs-state.sh sync` 做运行时同步
+
+## `notify_*` 钩子说明
+
+在 `keepalived/lb1/keepalived.conf` 和 `keepalived/lb2/keepalived.conf` 中，通常会看到：
+
+```conf
+notify_master "/opt/lvs-router/bin/ipvs-state.sh master"
+notify_backup "/opt/lvs-router/bin/ipvs-state.sh backup"
+notify_fault "/opt/lvs-router/bin/ipvs-state.sh fault"
+```
+
+它们的作用是：
+
+- `notify_master`：节点进入 `MASTER` 时执行 `ipvs-state.sh master`
+- `notify_backup`：节点进入 `BACKUP` 时执行 `ipvs-state.sh backup`
+- `notify_fault`：节点进入 `FAULT` 时执行 `ipvs-state.sh fault`
+
+当前仓库的设计里：
+
+- `Keepalived` 负责 VRRP 主备切换和 VIP 漂移
+- `ipvs-state.sh` 负责真正写入和清理内核中的 IPVS 规则
+
+因此，这些 `notify_*` 钩子就是 Keepalived 和 IPVS 规则同步之间的桥梁。
+
+### 可以删除吗
+
+可以删除，但不建议。
+
+如果删除：
+
+- 节点切到 `MASTER` 时，不会自动创建 IPVS 虚拟服务
+- 节点切到 `BACKUP` 或 `FAULT` 时，不会自动清理本机 IPVS 规则
+- 主备切换后，VIP 状态和 IPVS 转发表可能不同步
+
+换句话说，删除这些钩子后，Keepalived 仍然可以漂移 VIP，但本项目不会再自动同步 LVS/IPVS 规则。
+
+### 什么情况下才适合删除
+
+只有在以下情况之一时才适合：
+
+- 你不再使用 `ipvs-state.sh` 管理 IPVS
+- 你计划通过其他机制同步 IPVS 规则
+- 你只想保留 VRRP / VIP 漂移，而不让 Keepalived 参与 LVS 规则切换
+
+### 推荐做法
+
+推荐继续保留 `notify_*`，同时在需要时手工执行：
+
+```bash
+sudo /opt/lvs-router/bin/ipvs-state.sh sync
+```
+
+这样：
+
+- 正常主备切换时，规则会自动同步
+- 手工修改 `virtual_server.conf` 后，也可以主动做一次同步
 
 ### `start.sh`
 

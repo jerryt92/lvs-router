@@ -81,6 +81,7 @@
 ### 3. 选择本机角色
 
 每台 LB 节点都需要一份环境文件，安装后固定放在安装目录下的 `lvs-router.env`。可以从仓库中的 `lvs-router.env.example` 复制生成。
+`start.sh`、`stop.sh`、`status.sh`、`restart.sh` 会自动读取这份文件。
 
 `lb1` 示例：
 
