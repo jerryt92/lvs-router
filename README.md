@@ -307,14 +307,12 @@ sudo /opt/lvs-router/bin/stop.sh
 4. 执行 `scripts/install-host-assets.sh`
 5. 启动 `lvs-router.service`
 
-如果目标环境是 CentOS / RHEL 系，并且你希望直接生成一个可搬运的离线安装包，请优先使用：
+如果目标环境是 CentOS / RHEL 系，并且你希望生成一个可搬运的离线依赖包，请优先使用：
 
 ```bash
 ./packaging/centos-offline/build-bundle.sh
 ```
 
-默认会在 `packaging/centos-offline/` 下生成 `lvs-router-centos-offline/` 和 `lvs-router-centos-offline.tar.gz`。
+默认会在 `packaging/centos-offline/` 下生成 `lvs-router-centos-offline/` 和 `lvs-router-centos-offline.tar.gz`，内容只包含离线安装 `keepalived`、`iproute`、`ipvsadm`、`socat`、`kmod` 所需的 RPM 及清单文件。
 
 详细步骤见 `docs/centos-offline-install.md`。
-
-当前仓库已经完全移除容器化部署入口，推荐方式就是直接部署到 x86 Linux 宿主机。

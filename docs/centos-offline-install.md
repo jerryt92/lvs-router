@@ -1,6 +1,6 @@
-# CentOS 完全离线安装包使用说明
+# CentOS 离线依赖包使用说明
 
-本文档说明如何在一台可联网的 CentOS / RHEL 系机器上生成离线安装包，并在完全离线的目标主机上安装 `LVS-DR + Keepalived` 运行依赖和项目文件。
+本文档说明如何在一台可联网的 CentOS / RHEL 系机器上生成离线依赖包，并在完全离线的目标主机上安装 `keepalived`、`iproute`、`ipvsadm`、`socat`、`kmod` 及其依赖。
 
 ## 打包端要求
 
@@ -34,7 +34,7 @@ sudo yum install -y yum-utils
 进入项目根目录执行：
 
 ```bash
-chmod +x packaging/centos-offline/*.sh scripts/*.sh
+chmod +x packaging/centos-offline/*.sh
 ./packaging/centos-offline/build-bundle.sh
 ```
 
@@ -47,9 +47,9 @@ chmod +x packaging/centos-offline/*.sh scripts/*.sh
 
 包内主要内容：
 
-- `rpms/`：离线依赖 RPM
-- `project/`：项目文件副本
-- `install-offline-bundle.sh`：目标机一键安装脚本
+- `*.rpm`：离线依赖 RPM
+- `requested-packages.txt`：请求下载的包列表
+- `downloaded-rpms.txt`：实际下载到的 RPM 文件列表
 
 ## 2. 传输到离线目标机
 
@@ -70,78 +70,32 @@ cd lvs-router-centos-offline
 以 `root` 执行：
 
 ```bash
-chmod +x install-offline-bundle.sh
-./install-offline-bundle.sh
+dnf install -y --disablerepo='*' --nogpgcheck --skip-broken ./*.rpm
 ```
 
-该脚本会自动完成：
-
-- 使用本地 `rpms/*.rpm` 安装 `keepalived`、`iproute`、`ipvsadm`、`socat`、`kmod` 及其依赖
-- 安装项目脚本到你输入的安装目录，默认是 `/opt/lvs-router/bin`
-- 安装 Keepalived 配置到默认 `/opt/lvs-router/keepalived`
-- 安装环境文件到默认 `/opt/lvs-router/lvs-router.env`
-- 安装 systemd unit 源文件到默认 `/opt/lvs-router/systemd`
-- 在 `/etc/systemd/system` 下创建 `lvs-router.service` 到安装目录中 `systemd/lvs-router.service` 的符号链接
-- 执行 `systemctl daemon-reload`
-- 在复制项目文件前再次检查 `keepalived`、`ip`、`ipvsadm`、`socat`、`modprobe`、`systemctl` 是否可用
-- 默认启用服务，但默认不立即启动
-
-## 4. 修改配置并启动
-
-在目标机上编辑：
+如果目标机没有 `dnf`、但有 `yum`，可执行：
 
 ```bash
-vi /opt/lvs-router/lvs-router.env
+yum localinstall -y --disablerepo='*' --nogpgcheck --skip-broken ./*.rpm
 ```
 
-然后根据本机角色调整：
-
-- `KEEPALIVED_CONF=/opt/lvs-router/keepalived/lb1/keepalived.conf`
-- 或 `KEEPALIVED_CONF=/opt/lvs-router/keepalived/lb2/keepalived.conf`
-
-同时检查：
-
-- `/opt/lvs-router/keepalived/lb1/keepalived.conf`
-- `/opt/lvs-router/keepalived/lb2/keepalived.conf`
-- `/opt/lvs-router/keepalived/virtual_server.conf`
-
-确认 VIP、网卡名、Real Server 地址都已改成你的实际环境。
-
-启动服务：
+安装完成后，可验证关键命令是否已就绪：
 
 ```bash
-systemctl enable lvs-router.service
-systemctl start lvs-router.service
-```
-
-## 5. 验证
-
-```bash
-systemctl status lvs-router.service
-ip addr show <你的网卡名>
+keepalived --version
 ipvsadm -Ln
-curl -s http://<LB_IP>:45555
+ip -V
+socat -V
 ```
 
-日志默认输出到：
+## 4. 后续项目部署
+
+本脚本只负责准备和安装系统依赖，不再打包项目文件。
+
+如果你还需要部署 `lvs-router` 项目本身，请另外传输仓库内容，并执行项目内的安装流程，例如：
 
 ```bash
-/opt/lvs-router/logs/start.log
-/opt/lvs-router/logs/router-id-server.log
-/opt/lvs-router/logs/keepalived.log
+scripts/install-host-assets.sh
 ```
 
-## 可选环境变量
-
-安装脚本支持以下变量：
-
-```bash
-AUTO_ENABLE_SERVICES=1
-AUTO_START_SERVICES=0
-```
-
-如果你确定配置已提前改好，也可以在安装时直接启动：
-
-```bash
-AUTO_START_SERVICES=1 ./install-offline-bundle.sh
-```
+详细项目部署说明请参考仓库 `README.md`。
