@@ -40,8 +40,10 @@ chmod +x packaging/centos-offline/*.sh scripts/*.sh
 
 默认会生成：
 
-- `dist/lvs-router-centos-offline/`
-- `dist/lvs-router-centos-offline.tar.gz`
+- `packaging/centos-offline/lvs-router-centos-offline/`
+- `packaging/centos-offline/lvs-router-centos-offline.tar.gz`
+
+也就是说，离线安装目录和压缩包会默认创建在 `build-bundle.sh` 所在同级目录下。
 
 包内主要内容：
 
@@ -53,8 +55,8 @@ chmod +x packaging/centos-offline/*.sh scripts/*.sh
 
 将以下任一内容复制到离线目标机：
 
-- `dist/lvs-router-centos-offline.tar.gz`
-- 或整个 `dist/lvs-router-centos-offline/` 目录
+- `packaging/centos-offline/lvs-router-centos-offline.tar.gz`
+- 或整个 `packaging/centos-offline/lvs-router-centos-offline/` 目录
 
 如果传的是压缩包，先解压：
 

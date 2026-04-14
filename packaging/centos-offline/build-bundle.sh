@@ -3,13 +3,14 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
-OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/dist}"
+OUTPUT_DIR="${OUTPUT_DIR:-$SCRIPT_DIR}"
 BUNDLE_NAME="${BUNDLE_NAME:-lvs-router-centos-offline}"
-BUNDLE_ROOT="$OUTPUT_DIR/$BUNDLE_NAME"
+BUNDLE_ROOT=""
 RPM_DIR="$BUNDLE_ROOT/rpms"
 PROJECT_DIR="$BUNDLE_ROOT/project"
 PACKAGES="${CENTOS_PACKAGES:-keepalived iproute ipvsadm socat kmod}"
 ARCHIVE_PATH="$OUTPUT_DIR/$BUNDLE_NAME.tar.gz"
+STAGING_DIR=""
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -43,8 +44,23 @@ require_command tar
 require_command mkdir
 require_command rm
 require_command cp
+require_command mktemp
+require_command mv
 
-rm -rf "$BUNDLE_ROOT"
+cleanup() {
+  if [ -n "$STAGING_DIR" ] && [ -d "$STAGING_DIR" ]; then
+    rm -rf "$STAGING_DIR"
+  fi
+}
+
+trap cleanup EXIT
+
+STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lvs-router-centos-offline.XXXXXX")"
+BUNDLE_ROOT="$STAGING_DIR/$BUNDLE_NAME"
+RPM_DIR="$BUNDLE_ROOT/rpms"
+PROJECT_DIR="$BUNDLE_ROOT/project"
+
+rm -rf "$OUTPUT_DIR/$BUNDLE_NAME"
 mkdir -p "$RPM_DIR" "$PROJECT_DIR"
 
 (cd "$REPO_ROOT" && tar \
@@ -71,8 +87,12 @@ chmod +x "$BUNDLE_ROOT/install-offline-bundle.sh"
   ls -1 *.rpm 2>/dev/null | sort
 ) >"$BUNDLE_ROOT/downloaded-rpms.txt"
 
+mkdir -p "$OUTPUT_DIR"
+rm -f "$ARCHIVE_PATH"
+mv "$BUNDLE_ROOT" "$OUTPUT_DIR/$BUNDLE_NAME"
+
 (cd "$OUTPUT_DIR" && tar -czf "$ARCHIVE_PATH" "$BUNDLE_NAME")
 
-echo "Offline bundle directory created: $BUNDLE_ROOT"
+echo "Offline bundle directory created: $OUTPUT_DIR/$BUNDLE_NAME"
 echo "Offline bundle archive created:   $ARCHIVE_PATH"
 echo "Copy the tar.gz file or the whole bundle directory to the offline CentOS host."

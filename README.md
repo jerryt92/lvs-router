@@ -313,6 +313,8 @@ sudo /opt/lvs-router/bin/stop.sh
 ./packaging/centos-offline/build-bundle.sh
 ```
 
+默认会在 `packaging/centos-offline/` 下生成 `lvs-router-centos-offline/` 和 `lvs-router-centos-offline.tar.gz`。
+
 详细步骤见 `docs/centos-offline-install.md`。
 
 当前仓库已经完全移除容器化部署入口，推荐方式就是直接部署到 x86 Linux 宿主机。
