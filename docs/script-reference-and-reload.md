@@ -8,6 +8,7 @@
 - `scripts/stop.sh`
 - `lb/ipvs-state.sh`
 - `scripts/router-id-server.sh`
+- `scripts/restart.sh`
 - `scripts/start.sh`
 - `scripts/status.sh`
 
@@ -127,6 +128,18 @@
 - 删除 PID 文件
 - 调用 `ipvs-state.sh stop`
 - 删除 `IPVS_STATE_FILE`
+
+### `restart.sh`
+
+用途：
+
+- 顺序执行 `stop.sh` 和 `start.sh`
+- 用于配置变更后的一键重启
+
+典型场景：
+
+- 修改 `keepalived.conf` 后重启整套进程
+- 手工运维时替代逐条执行停止和启动命令
 
 ### `status.sh`
 

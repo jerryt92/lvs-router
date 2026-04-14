@@ -170,6 +170,12 @@ sudo /opt/lvs-router/bin/start.sh
 - `keepalived.pid`
 - `router-id-server.pid`
 
+重启：
+
+```bash
+sudo /opt/lvs-router/bin/restart.sh
+```
+
 查看状态：
 
 ```bash
