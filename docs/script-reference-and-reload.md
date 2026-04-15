@@ -8,8 +8,10 @@
 - `scripts/stop.sh`
 - `scripts/router-id-server.sh`
 - `scripts/restart.sh`
+- `scripts/start-ipvs-keepalived.sh`
 - `scripts/start.sh`
 - `scripts/status.sh`
+- `scripts/stop-ipvs-keepalived.sh`
 
 安装到目标机器后，这些脚本通常会被复制到 `/opt/lvs-router/bin/` 下运行。
 `start.sh`、`stop.sh`、`status.sh`、`restart.sh` 默认会自动加载安装目录下的 `lvs-router.env`。
@@ -25,6 +27,7 @@
 - 将 `router_id` 写入 `ROUTER_HTTP_DOCROOT/router_id`
 - 在本机 `lo` 上添加 `VIP/32`
 - 设置 `arp_ignore` / `arp_announce`，避免 LVS-DR 模式下错误响应 ARP
+- 设置 `net.ipv4.vs.expire_nodest_conn=1` 和 `net.ipv4.vs.expire_quiescent_template=1`，让失效 RS 的旧连接和模板更快过期
 
 典型场景：
 
@@ -74,26 +77,44 @@
 
 ## `virtual_server.conf` 的生效方式
 
-当前仓库默认由 `Keepalived` 原生加载 `keepalived/virtual_server.conf`。
+当前仓库通过两个 Keepalived 实例配合完成 VRRP 和 IPVS：
 
-具体做法是：
+- `keepalived/lb1/keepalived.conf` / `keepalived/lb2/keepalived.conf`：只负责 VRRP 和 VIP 漂移
+- `keepalived/ipvs.conf`：只负责加载 `virtual_server.conf`
 
-- `keepalived/lb1/keepalived.conf`
-- `keepalived/lb2/keepalived.conf`
+具体行为是：
 
-都会在主配置末尾通过：
+- 当前节点进入 `MASTER` 时，`notify_master` 调用 `start-ipvs-keepalived.sh`
+- 当前节点进入 `BACKUP` 或 `FAULT` 时，`notify_*` 调用 `stop-ipvs-keepalived.sh`
 
-```conf
-include /opt/lvs-router/keepalived/virtual_server.conf
-```
+因此：
 
-把 `virtual_server` / `real_server` / `TCP_CHECK` 直接交给 Keepalived 解析。
+- `TCP_CHECK` 仍然由 Keepalived 原生执行
+- 只有当前持有 VIP 的节点会运行 IPVS/TCP_CHECK Keepalived 实例
+- 非 VIP 节点会停止该实例并清理本机 IPVS 规则
 
-这意味着：
+这样设计的原因是：当前项目允许 `LB` 与 `real_server` 节点重合。
+如果两台机器都长期保留同一组 `virtual_server` / IPVS 规则，那么一台 LB 完成第一次调度后，转发到另一台同样也带有这组规则的节点时，可能再次触发本机 LVS 处理，最终引发递归转发、规则双活或主备回切后的异常路径。
+通过把 VRRP 与 IPVS/TCP_CHECK 拆成两个 Keepalived 实例，可以保证只有真正持有 VIP 的节点才承担 director 身份。
 
-- `TCP_CHECK` 会由 Keepalived 原生执行
-- IPVS 虚拟服务和 Real Server 由 Keepalived 直接创建和维护
-- 不再通过 `notify_*` 钩子调用额外脚本去写同一组 IPVS 规则
+这套方案的弊端是：主备倒换时除了 VIP 漂移，还需要额外启动或停止一次独立的 IPVS/TCP_CHECK Keepalived 实例。
+因此恢复时间会比“双机都常驻 `virtual_server`”略慢，尤其是在还需要等待首轮健康检查把可用 RS 加回池中时更明显。
+
+### `start-ipvs-keepalived.sh`
+
+用途：
+
+- 启动独立的 IPVS Keepalived 实例
+- 使用单独的 PID 文件，避免与 VRRP Keepalived 实例冲突
+- 在该实例中加载 `keepalived/ipvs.conf`，从而启用 `virtual_server.conf` 和 `TCP_CHECK`
+
+### `stop-ipvs-keepalived.sh`
+
+用途：
+
+- 停止独立的 IPVS Keepalived 实例
+- 清理该实例对应的 PID 文件
+- 删除当前 `virtual_server.conf` 对应的 IPVS 服务，保证非 VIP 节点不保留规则
 
 ### `start.sh`
 
@@ -110,14 +131,17 @@ include /opt/lvs-router/keepalived/virtual_server.conf
 3. 调用 `load-ipvs-modules.sh`
 4. 调用 `ipvsadm -C` 清空本机残留的 IPVS 规则
 5. 调用 `host-prep.sh`
-6. 后台启动 `router-id-server.sh`
-7. 后台启动 `keepalived -nl -f "$KEEPALIVED_CONF"`
+6. 调用 `stop-ipvs-keepalived.sh`，确保当前节点启动前没有残留的 IPVS Keepalived 实例
+7. 后台启动 `router-id-server.sh`
+8. 后台启动 VRRP Keepalived：`keepalived -nl -f "$KEEPALIVED_CONF"`
+9. 当前节点变为 `MASTER` 后，由 `notify_master` 启动独立的 IPVS Keepalived 实例
 
 说明：
 
 - 会检查 PID 文件，避免重复启动
 - 启动前会先做 `keepalived -t` 校验，失败时直接退出
 - 启动时会先执行一次 `ipvsadm -C`，避免旧 IPVS 规则残留影响当前 VIP 的转发结果
+- 独立的 IPVS Keepalived 实例只有在当前节点进入 `MASTER` 后才会被启动
 - `keepalived` 路径优先从 `PATH` 查找，也可通过 `KEEPALIVED_BIN` 指定
 
 ### `stop.sh`
@@ -128,6 +152,7 @@ include /opt/lvs-router/keepalived/virtual_server.conf
 
 本地停止流程会：
 
+- 调用 `stop-ipvs-keepalived.sh` 停掉独立的 IPVS Keepalived 实例并清理规则
 - 读取 `run/pids/keepalived.pid` 和 `run/pids/router-id-server.pid`
 - 对 PID 文件中的进程执行 `kill -9`
 - 兜底清理匹配当前配置的 `keepalived` 残留进程
@@ -151,7 +176,7 @@ include /opt/lvs-router/keepalived/virtual_server.conf
 
 用途：
 
-- 查看 `keepalived` 和 `router-id-server` 的 PID 文件状态
+- 查看 VRRP Keepalived、IPVS Keepalived 和 `router-id-server` 的 PID 文件状态
 - 如果进程仍存活，输出对应 PID 和命令行
 - 显示日志文件位置
 - 输出 `ipvsadm -Ln`，便于排查当前内核 IPVS 规则
@@ -175,7 +200,7 @@ include /opt/lvs-router/keepalived/virtual_server.conf
 - `advert_int`
 - `authentication`
 - `virtual_ipaddress`
-- 对 `virtual_server.conf` 的 `include` 路径
+- `notify_*` 钩子
 
 推荐做法分两种：
 
@@ -229,15 +254,15 @@ tail -n 50 /opt/lvs-router/logs/keepalived.log
 - `weight`
 - `TCP_CHECK`
 
-这部分已经是 Keepalived 主配置的一部分，因为 `lb1/lb2` 的 `keepalived.conf` 会通过 `include` 直接加载它。
+这部分由独立的 IPVS Keepalived 实例加载，因为 `keepalived/ipvs.conf` 会通过 `include` 引入 `virtual_server.conf`。
 
-当前实现里，最直接的热更新方法是让 Keepalived 重读配置：
+当前实现里，最直接的热更新方法是让独立的 IPVS Keepalived 实例重读配置：
 
 ```bash
-sudo pkill -HUP keepalived
+sudo kill -HUP "$(cat /opt/lvs-router/run/pids/keepalived-ipvs.pid)"
 ```
 
-这样 Keepalived 会重新解析 `virtual_server.conf`，并按新配置更新 IPVS 服务和 `TCP_CHECK`。
+这样独立的 IPVS Keepalived 实例会重新解析 `virtual_server.conf`，并按新配置更新 IPVS 服务和 `TCP_CHECK`。
 
 同步后建议检查：
 
@@ -257,7 +282,7 @@ tail -n 50 /opt/lvs-router/logs/keepalived.log
 如果你修改的是 `virtual_server.conf`：
 
 - 先同步配置到所有 LB 节点
-- 然后对 Keepalived 执行 `HUP`，或直接执行 `stop.sh` 后再执行 `start.sh`
+- 然后对独立的 IPVS Keepalived 实例执行 `HUP`，或直接执行 `stop.sh` 后再执行 `start.sh`
 
 如果你不确定当前改动属于哪一类：
 

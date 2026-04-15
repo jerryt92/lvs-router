@@ -14,6 +14,7 @@ LOG_DIR="${ROUTER_LOG_DIR:-$INSTALL_ROOT/logs}"
 RUN_DIR="${ROUTER_RUN_DIR:-$INSTALL_ROOT/run}"
 PID_DIR="$RUN_DIR/pids"
 KEEPALIVED_PID_FILE="$PID_DIR/keepalived.pid"
+IPVS_KEEPALIVED_PID_FILE="${IPVS_KEEPALIVED_PID_FILE:-$PID_DIR/keepalived-ipvs.pid}"
 ROUTER_PID_FILE="$PID_DIR/router-id-server.pid"
 
 print_process_status() {
@@ -46,11 +47,13 @@ print_process_status() {
 echo "lvs-router status"
 echo
 print_process_status "$KEEPALIVED_PID_FILE" "keepalived"
+print_process_status "$IPVS_KEEPALIVED_PID_FILE" "keepalived-ipvs"
 print_process_status "$ROUTER_PID_FILE" "router-id-server"
 echo
 
 echo "pid files:"
 echo "  $KEEPALIVED_PID_FILE"
+echo "  $IPVS_KEEPALIVED_PID_FILE"
 echo "  $ROUTER_PID_FILE"
 echo
 

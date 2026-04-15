@@ -72,6 +72,7 @@ stop_matching_processes() {
 }
 
 log_line "running local stop sequence"
+"$BIN_DIR/stop-ipvs-keepalived.sh" >>"$START_LOG" 2>&1 || true
 stop_pid_file "$KEEPALIVED_PID_FILE" "keepalived"
 stop_pid_file "$ROUTER_PID_FILE" "router-id-server"
 stop_matching_processes "keepalived -nl -f $KEEPALIVED_CONF" "keepalived"

@@ -34,6 +34,9 @@ sysctl -w net.ipv4.conf.default.arp_ignore=1 >/dev/null
 sysctl -w net.ipv4.conf.default.arp_announce=2 >/dev/null
 sysctl -w net.ipv4.conf.lo.arp_ignore=1 >/dev/null
 sysctl -w net.ipv4.conf.lo.arp_announce=2 >/dev/null
+# Expire stale IPVS connections/templates quickly after a real server disappears.
+sysctl -w net.ipv4.vs.expire_nodest_conn=1 >/dev/null
+sysctl -w net.ipv4.vs.expire_quiescent_template=1 >/dev/null
 
 if [ -n "$IFACE" ]; then
   sysctl -w "net.ipv4.conf.$IFACE.arp_ignore=1" >/dev/null

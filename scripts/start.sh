@@ -85,6 +85,7 @@ if ! "$KEEPALIVED_BIN" -t -f "$KEEPALIVED_CONF" >>"$KEEPALIVED_LOG" 2>&1; then
 fi
 
 "$BIN_DIR/load-ipvs-modules.sh" >>"$START_LOG" 2>&1
+"$BIN_DIR/stop-ipvs-keepalived.sh" >>"$START_LOG" 2>&1 || true
 log_line "clearing stale ipvs rules before keepalived startup"
 "$IPVSADM_BIN" -C >>"$START_LOG" 2>&1
 "$BIN_DIR/host-prep.sh" >>"$START_LOG" 2>&1

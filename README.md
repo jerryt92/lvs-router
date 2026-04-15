@@ -3,9 +3,16 @@
 本项目提供一套可直接部署到 x86 Linux 宿主机的 `LVS-DR + Keepalived` 高可用负载均衡方案，默认按两台 LB 节点组织：`lb1` 和 `lb2`。
 
 整体设计保持不变：
-- `keepalived/lb1/keepalived.conf`、`keepalived/lb2/keepalived.conf` 负责 VRRP 和 VIP 漂移，并原生加载 `virtual_server.conf`
-- `keepalived/virtual_server.conf` 描述 IPVS 虚拟服务、Real Server 和 `TCP_CHECK`
-- `Keepalived` 直接负责下发 IPVS 规则和执行后端健康检查
+- `keepalived/lb1/keepalived.conf`、`keepalived/lb2/keepalived.conf` 只负责 VRRP 和 VIP 漂移
+- `keepalived/ipvs.conf` 负责加载 `virtual_server.conf`，由独立的 Keepalived 实例执行 `TCP_CHECK`
+- 当前持有 VIP 的节点会通过 `notify_master` 启动 IPVS/TCP_CHECK 实例；失去 VIP 时会停止该实例并清理规则
+
+这样拆分的原因是：本项目存在 `LB` 与 `real_server` 重合的场景。
+如果两台机器同时常驻带 `virtual_server` 的 Keepalived/IPVS 规则，那么请求在一台 LB 上完成第一次调度后，转发到另一台同样也持有这组规则的 LB 时，可能再次被当成 VIP 流量继续调度，进而出现递归转发、规则双活、回切后路径异常等问题。
+因此当前实现固定让两台节点都常驻 VRRP Keepalived，而只让当前持有 VIP 的节点额外运行 IPVS/TCP_CHECK Keepalived 实例。
+
+这套方案的代价是：主备倒换时除了 VIP 漂移，还需要额外启动或停止一次 IPVS/TCP_CHECK Keepalived 实例。
+因此切换恢复时间通常会比“双机都常驻 IPVS/TCP_CHECK”略慢一些，尤其是在还要等待首轮 `TCP_CHECK` 建立可用后端状态时会更明显。
 
 ## 架构说明
 
@@ -67,7 +74,7 @@
 - `virtual_ipaddress` 是否为你的业务 VIP
 - `router_id` 是否唯一
 - `priority` 是否符合主备顺序
-- 主配置末尾是否保留 `include /opt/lvs-router/keepalived/virtual_server.conf`
+- `notify_master` / `notify_backup` / `notify_fault` 是否仍指向安装目录下的 IPVS 控制脚本
 
 ### 2. 修改虚拟服务配置
 
@@ -81,6 +88,7 @@
 警告：如果你的拓扑是“LB 节点自己同时也是 `real_server`”，不要继续使用 `lb_algo rr`。
 在这种情况下，`rr` 可能把请求轮到另一台同样也在运行 Keepalived/IPVS 的 LB 上，形成递归转发，表现为间歇性失败或按固定节奏失败。
 当前模板默认改为 `lb_algo sh`，用源地址哈希降低这种递归转发风险；但更稳妥的拓扑仍然是让 LB 和真实 RS 分离。
+如果你继续使用“LB 与 RS 重合”的拓扑，推荐保持当前双实例模式，让非 VIP 节点不保留这组 IPVS 规则。
 
 ### 3. 选择本机角色
 
@@ -141,7 +149,8 @@ sudo ./scripts/install-host-assets.sh
 例如输入 `1` 表示 `lb1`，输入 `2` 表示 `lb2`；如果存在 `lb3`、`lb4` 也会一并显示并可直接选择。直接回车时默认优先选择 `lb1`。
 在复制文件前，安装脚本会先检查运行依赖是否已经可用，包括 `keepalived`、`ip`、`ipvsadm`、`socat` 和 `modprobe`。
 如果你使用默认安装目录 `/opt/lvs-router`，安装脚本不会再错误改写成 `/opt/opt/lvs-router`。
-当前模板会在 `lb1` / `lb2` 主配置末尾通过 `include` 原生加载 `virtual_server.conf`，因此 `TCP_CHECK` 会由 Keepalived 直接执行。
+当前模板会在 VRRP 状态切换时，通过 `notify_*` 启动或停止独立的 IPVS Keepalived 实例。
+因此 `TCP_CHECK` 仍然由 Keepalived 原生执行，但非 VIP 节点不会保留这组 IPVS 规则。
 如果安装目录下已经存在上一版 `lvs-router`，安装脚本会先尝试执行旧的 `bin/stop.sh` 停掉旧进程，清空本机旧的 IPVS 规则，然后直接删除整个安装目录再重新安装。
 
 这一步会完成：
@@ -179,6 +188,7 @@ sudo /opt/lvs-router/bin/start.sh
 启动成功后会在 `/opt/lvs-router/run/pids/` 下生成：
 
 - `keepalived.pid`
+- `keepalived-ipvs.pid`（仅当前 MASTER 持有 VIP 后出现）
 - `router-id-server.pid`
 
 重启：
@@ -215,9 +225,11 @@ script_user root
 2. 调用 `ipvsadm -C` 清空本机残留的 IPVS 规则
 3. 调用安装目录下的 `bin/host-prep.sh`
 4. 启动安装目录下的 `bin/router-id-server.sh`
-5. 启动 `keepalived -nl -f ${KEEPALIVED_CONF}`
+5. 启动 VRRP Keepalived：`keepalived -nl -f ${KEEPALIVED_CONF}`
+6. 当前节点切到 `MASTER` 后，由 `notify_master` 调用 `start-ipvs-keepalived.sh` 启动独立的 IPVS/TCP_CHECK Keepalived 实例
+7. 当前节点切到 `BACKUP` / `FAULT` 后，由 `notify_*` 调用 `stop-ipvs-keepalived.sh` 停止独立实例并清理本机规则
 
-这样做是为了避免机器上遗留的旧 IPVS 规则影响当前 Keepalived 新下发的虚拟服务和轮询结果。
+这样做是为了保证只有当前持有 VIP 的节点才保留 IPVS 规则，同时仍然复用 Keepalived 原生 `TCP_CHECK`。
 
 日志统一输出到安装目录下的 `logs`：
 
@@ -250,7 +262,7 @@ ipvsadm -Ln
 ```
 
 应能看到 `virtual_server.conf` 中配置的 VIP、端口和 RS 列表。
-这些规则由 Keepalived 原生创建和维护。
+这些规则只会出现在当前持有 VIP 的节点上，并由独立的 Keepalived IPVS 实例创建和维护。
 
 ### 4. 检查健康端口
 
@@ -289,13 +301,13 @@ sudo pkill -HUP keepalived
 
 ### 修改 `keepalived/virtual_server.conf`
 
-这份文件已经被 `lb1/lb2` 的主配置通过 `include` 原生纳入 Keepalived。
-因此，更新其中的 `virtual_server`、`real_server`、`weight` 或 `TCP_CHECK` 后，需要让 Keepalived 重新加载配置。
+这份文件由独立的 IPVS Keepalived 实例通过 `keepalived/ipvs.conf` 加载。
+因此，更新其中的 `virtual_server`、`real_server`、`weight` 或 `TCP_CHECK` 后，需要让 IPVS Keepalived 实例重新加载配置。
 
 推荐做法：
 
 ```bash
-sudo pkill -HUP keepalived
+sudo kill -HUP "$(cat /opt/lvs-router/run/pids/keepalived-ipvs.pid)"
 ```
 
 如果你同时修改了 VIP、接口或其他更关键的宿主机相关配置，仍建议直接重启整套服务：
