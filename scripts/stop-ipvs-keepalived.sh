@@ -17,6 +17,25 @@ IPVS_KEEPALIVED_PID_FILE="${IPVS_KEEPALIVED_PID_FILE:-$PID_DIR/keepalived-ipvs.p
 IPVS_KEEPALIVED_VRRP_PID_FILE="${IPVS_KEEPALIVED_VRRP_PID_FILE:-$PID_DIR/keepalived-ipvs-vrrp.pid}"
 IPVS_KEEPALIVED_CHECKERS_PID_FILE="${IPVS_KEEPALIVED_CHECKERS_PID_FILE:-$PID_DIR/keepalived-ipvs-checkers.pid}"
 VS_CONF="${VIRTUAL_SERVER_CONF:-$INSTALL_ROOT/keepalived/virtual_server.conf}"
+LB_RS_TOPOLOGY="${LB_RS_TOPOLOGY:-merged}"
+FORCE_STOP=0
+
+if [ "${1:-}" = "--force" ]; then
+  FORCE_STOP=1
+fi
+
+case "$LB_RS_TOPOLOGY" in
+  merged|separated)
+    ;;
+  *)
+    echo "invalid LB_RS_TOPOLOGY: $LB_RS_TOPOLOGY (expected merged or separated)" >&2
+    exit 1
+    ;;
+esac
+
+if [ "$LB_RS_TOPOLOGY" = "separated" ] && [ "$FORCE_STOP" -ne 1 ]; then
+  exit 0
+fi
 
 stop_pid_file() {
   pid_file="$1"

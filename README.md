@@ -389,3 +389,72 @@ sudo /opt/lvs-router/bin/stop.sh
 默认会在 `packaging/centos-offline/` 下生成 `lvs-router-centos-offline/` 和 `lvs-router-centos-offline.tar.gz`，内容只包含离线安装 `keepalived`、`iproute`、`ipvsadm`、`socat`、`kmod` 所需的 RPM 及清单文件。
 
 详细步骤见 `docs/centos-offline-install.md`。
+
+## LB/RS 拓扑模式说明
+
+本项目现在支持通过环境变量 `LB_RS_TOPOLOGY` 显式声明当前拓扑：
+
+- `LB_RS_TOPOLOGY=merged`：LB 与 RS 可能重合，默认值
+- `LB_RS_TOPOLOGY=separated`：LB 与 RS 明确分离
+
+可在安装目录下的 `lvs-router.env` 中配置，例如：
+
+```bash
+KEEPALIVED_CONF=/opt/lvs-router/keepalived/lb1/keepalived.conf
+HEALTHY_HTTP_PORT=45555
+ROUTER_HTTP_DOCROOT=/opt/lvs-router/run/router-http
+IPVS_MODULES="ip_vs ip_vs_rr ip_vs_wrr ip_vs_sh"
+LB_RS_TOPOLOGY=separated
+```
+
+### 为什么在 LB/RS 合并模式下，备用节点必须停掉 IPVS/TCP_CHECK
+
+当 `LB` 节点自己同时也是某个 `real_server` 时，备用节点如果继续常驻 `virtual_server`、IPVS 规则和 `TCP_CHECK`，问题不只是“多做了一份健康检查”，而是它仍然保留了 director 身份。
+
+典型风险路径如下：
+
+1. 主节点持有 VIP，并根据 `virtual_server` 规则把一个请求调度到另一台机器
+2. 这台被选中的机器本身既是 RS，又仍然保留着相同的 IPVS `virtual_server` 规则
+3. 请求进入该机器后，内核可能再次把这笔流量当成需要由 LVS 处理的 VIP 流量
+4. 结果就会出现二次调度，继续把流量转发给别的 RS，甚至再转回另一台 LB
+
+这会带来几类典型故障：
+
+- 递归转发：一笔原本只应被调度一次的请求，在两台都保留 IPVS 规则的机器之间再次被调度
+- 规则双活：虽然 VIP 只有一台机器持有，但两台机器都在以 director 视角保留相同的虚拟服务和后端池
+- 主备回切路径异常：切换前后，旧连接、模板和新规则可能叠加，排障时会看到请求路径不稳定、间歇性失败或按固定节奏失败
+- 健康状态与实际接管角色错位：备用节点虽然不该对外承担 director 流量，却仍然在维护自己的 `TCP_CHECK` 状态和可用池判断
+
+所以在 `merged` 模式下，设计目标不是“让备用少做点事”，而是必须确保非 VIP 节点不再保留 director 所需的 IPVS/TCP_CHECK 运行状态。也正因为这个原因，当前实现会在节点进入 `BACKUP` 或 `FAULT` 时调用 `stop-ipvs-keepalived.sh`，停掉独立的 IPVS Keepalived 实例并删除本机对应规则。
+
+### 为什么更推荐 LB/RS 分离
+
+更稳妥的生产拓扑，仍然是让 LB 与真实 RS 分离：
+
+- LB 机器只承担 VIP、VRRP、IPVS 和健康检查
+- RS 机器只提供业务服务，不再承担 director 角色
+- 请求只会在 LB 上完成一次调度，转发到 RS 后不会再命中另一层相同的 LVS 规则
+
+这样做的好处是：
+
+- 转发路径更单一，更容易推导和排障
+- 不需要依赖“备用必须清空 director 规则”来规避递归转发
+- 两台 LB 可以都常驻 IPVS/TCP_CHECK，切换时不需要额外等待独立实例启动
+- 备用节点可以提前维持后端健康状态，故障切换收敛时间通常更短
+
+### 两种模式的当前行为
+
+`merged` 模式下：
+
+- 当前持有 VIP 的节点进入 `MASTER` 时启动独立的 IPVS/TCP_CHECK Keepalived 实例
+- 节点进入 `BACKUP` 或 `FAULT` 时停止该实例并清理本机 `virtual_server` 对应规则
+- 适用于 LB/RS 重合，需要强制避免备用节点继续保留 director 规则的场景
+
+`separated` 模式下：
+
+- `start.sh` 启动时会直接拉起独立的 IPVS/TCP_CHECK Keepalived 实例
+- VRRP 状态切到 `BACKUP` 或 `FAULT` 时，不再因为状态变化而停掉该实例
+- 只有完整执行 `stop.sh` 时，才会强制停止该实例并清理规则
+- 适用于 LB 与 RS 明确分离，希望两台 LB 都常驻 IPVS/TCP_CHECK 以缩短切换恢复时间的场景
+
+如果你的网络拓扑允许，建议优先采用 `LB_RS_TOPOLOGY=separated`，并从架构上把 LB 与 RS 拆开；`merged` 更适合作为兼容或过渡方案，而不是长期首选方案。

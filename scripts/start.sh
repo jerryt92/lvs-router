@@ -20,6 +20,16 @@ KEEPALIVED_LOG="${KEEPALIVED_LOG:-$LOG_DIR/keepalived.log}"
 ROUTER_ID_LOG="${ROUTER_ID_LOG:-$LOG_DIR/router-id-server.log}"
 KEEPALIVED_PID_FILE="$PID_DIR/keepalived.pid"
 ROUTER_PID_FILE="$PID_DIR/router-id-server.pid"
+LB_RS_TOPOLOGY="${LB_RS_TOPOLOGY:-merged}"
+
+case "$LB_RS_TOPOLOGY" in
+  merged|separated)
+    ;;
+  *)
+    echo "invalid LB_RS_TOPOLOGY: $LB_RS_TOPOLOGY (expected merged or separated)" >&2
+    exit 1
+    ;;
+esac
 
 log_line() {
   printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >>"$START_LOG"
@@ -85,7 +95,7 @@ if ! "$KEEPALIVED_BIN" -t -f "$KEEPALIVED_CONF" >>"$KEEPALIVED_LOG" 2>&1; then
 fi
 
 "$BIN_DIR/load-ipvs-modules.sh" >>"$START_LOG" 2>&1
-"$BIN_DIR/stop-ipvs-keepalived.sh" >>"$START_LOG" 2>&1 || true
+"$BIN_DIR/stop-ipvs-keepalived.sh" --force >>"$START_LOG" 2>&1 || true
 log_line "clearing stale ipvs rules before keepalived startup"
 "$IPVSADM_BIN" -C >>"$START_LOG" 2>&1
 "$BIN_DIR/host-prep.sh" >>"$START_LOG" 2>&1
@@ -99,6 +109,19 @@ log_line "router-id-server started with pid $router_pid"
 keepalived_pid=$!
 printf '%s\n' "$keepalived_pid" >"$KEEPALIVED_PID_FILE"
 log_line "keepalived started with pid $keepalived_pid using $KEEPALIVED_CONF"
+
+if [ "$LB_RS_TOPOLOGY" = "separated" ]; then
+  log_line "LB_RS_TOPOLOGY=separated, starting resident ipvs keepalived instance"
+  if ! "$BIN_DIR/start-ipvs-keepalived.sh" >>"$START_LOG" 2>&1; then
+    log_line "failed to start resident ipvs keepalived instance"
+    rm -f "$ROUTER_PID_FILE"
+    rm -f "$KEEPALIVED_PID_FILE"
+    kill -9 "$router_pid" 2>/dev/null || true
+    kill -9 "$keepalived_pid" 2>/dev/null || true
+    echo "failed to start resident ipvs keepalived instance" >&2
+    exit 1
+  fi
+fi
 
 sleep 1
 

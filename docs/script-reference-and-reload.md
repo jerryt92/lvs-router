@@ -87,7 +87,7 @@
 - 当前节点进入 `MASTER` 时，`notify_master` 调用 `start-ipvs-keepalived.sh`
 - 当前节点进入 `BACKUP` 或 `FAULT` 时，`notify_*` 调用 `stop-ipvs-keepalived.sh`
 
-因此：
+默认配置下，`LB_RS_TOPOLOGY=merged`，因此：
 
 - `TCP_CHECK` 仍然由 Keepalived 原生执行
 - 只有当前持有 VIP 的节点会运行 IPVS/TCP_CHECK Keepalived 实例
@@ -99,6 +99,10 @@
 
 这套方案的弊端是：主备倒换时除了 VIP 漂移，还需要额外启动或停止一次独立的 IPVS/TCP_CHECK Keepalived 实例。
 因此恢复时间会比“双机都常驻 `virtual_server`”略慢，尤其是在还需要等待首轮健康检查把可用 RS 加回池中时更明显。
+
+如果你的拓扑是 `LB` 与 `RS` 分离，可以在 `lvs-router.env` 中设置 `LB_RS_TOPOLOGY=separated`。
+此时 `start.sh` 会在启动阶段直接拉起独立的 IPVS/TCP_CHECK Keepalived 实例，而节点进入 `BACKUP` 或 `FAULT` 时不再因为 VRRP 状态变化而停止它。
+这样两台 LB 都可以常驻 `virtual_server` 与 `TCP_CHECK`，从而缩短故障切换时的恢复窗口。
 
 ### `start-ipvs-keepalived.sh`
 
@@ -116,6 +120,11 @@
 - 清理该实例对应的 PID 文件
 - 删除当前 `virtual_server.conf` 对应的 IPVS 服务，保证非 VIP 节点不保留规则
 
+补充说明：
+
+- 在 `LB_RS_TOPOLOGY=merged` 下，这是 `notify_backup` / `notify_fault` 的默认行为
+- 在 `LB_RS_TOPOLOGY=separated` 下，脚本只会在显式 `--force` 时真正停止实例并清理规则
+
 ### `start.sh`
 
 用途：
@@ -131,17 +140,19 @@
 3. 调用 `load-ipvs-modules.sh`
 4. 调用 `ipvsadm -C` 清空本机残留的 IPVS 规则
 5. 调用 `host-prep.sh`
-6. 调用 `stop-ipvs-keepalived.sh`，确保当前节点启动前没有残留的 IPVS Keepalived 实例
+6. 调用 `stop-ipvs-keepalived.sh --force`，确保当前节点启动前没有残留的 IPVS Keepalived 实例
 7. 后台启动 `router-id-server.sh`
 8. 后台启动 VRRP Keepalived：`keepalived -nl -f "$KEEPALIVED_CONF"`
-9. 当前节点变为 `MASTER` 后，由 `notify_master` 启动独立的 IPVS Keepalived 实例
+9. 如果 `LB_RS_TOPOLOGY=separated`，启动阶段直接拉起独立的 IPVS Keepalived 实例
+10. 当前节点变为 `MASTER` 后，由 `notify_master` 启动独立的 IPVS Keepalived 实例
 
 说明：
 
 - 会检查 PID 文件，避免重复启动
 - 启动前会先做 `keepalived -t` 校验，失败时直接退出
 - 启动时会先执行一次 `ipvsadm -C`，避免旧 IPVS 规则残留影响当前 VIP 的转发结果
-- 独立的 IPVS Keepalived 实例只有在当前节点进入 `MASTER` 后才会被启动
+- 在 `LB_RS_TOPOLOGY=merged` 下，独立的 IPVS Keepalived 实例只有在当前节点进入 `MASTER` 后才会被启动
+- 在 `LB_RS_TOPOLOGY=separated` 下，独立的 IPVS Keepalived 实例会在 `start.sh` 执行阶段直接启动，并在主备切换时保持常驻
 - `keepalived` 路径优先从 `PATH` 查找，也可通过 `KEEPALIVED_BIN` 指定
 
 ### `stop.sh`
@@ -152,7 +163,7 @@
 
 本地停止流程会：
 
-- 调用 `stop-ipvs-keepalived.sh` 停掉独立的 IPVS Keepalived 实例并清理规则
+- 调用 `stop-ipvs-keepalived.sh --force` 停掉独立的 IPVS Keepalived 实例并清理规则
 - 读取 `run/pids/keepalived.pid` 和 `run/pids/router-id-server.pid`
 - 对 PID 文件中的进程执行 `kill -9`
 - 兜底清理匹配当前配置的 `keepalived` 残留进程
