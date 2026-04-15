@@ -6,7 +6,6 @@
 - `scripts/load-ipvs-modules.sh`
 - `lb/serve-router-id.sh`
 - `scripts/stop.sh`
-- `lb/ipvs-state.sh`
 - `scripts/router-id-server.sh`
 - `scripts/restart.sh`
 - `scripts/start.sh`
@@ -14,6 +13,7 @@
 
 安装到目标机器后，这些脚本通常会被复制到 `/opt/lvs-router/bin/` 下运行。
 `start.sh`、`stop.sh`、`status.sh`、`restart.sh` 默认会自动加载安装目录下的 `lvs-router.env`。
+重新执行 `scripts/install-host-assets.sh` 时，如果安装目录下已有旧版 `lvs-router`，安装脚本会先尝试调用旧的 `bin/stop.sh` 停掉旧进程，清空本机旧的 IPVS 规则，再删除整个安装目录后重新安装新文件。
 
 ## 脚本说明
 
@@ -72,82 +72,28 @@
 - 作为节点身份识别和简单探活接口
 - 便于通过 `curl http://<LB_IP>:45555` 查看当前节点 `router_id`
 
-### `ipvs-state.sh`
+## `virtual_server.conf` 的生效方式
 
-用途：
+当前仓库默认由 `Keepalived` 原生加载 `keepalived/virtual_server.conf`。
 
-- 从 `VIRTUAL_SERVER_CONF` 读取虚拟服务配置
-- 使用 `ipvsadm` 创建、更新或删除 IPVS 虚拟服务与 Real Server
-- 通过 `IPVS_STATE_FILE` 记录当前已下发的服务，便于后续清理旧规则
+具体做法是：
 
-支持状态：
+- `keepalived/lb1/keepalived.conf`
+- `keepalived/lb2/keepalived.conf`
 
-- `master`：写入或更新当前虚拟服务
-- `backup`：删除当前虚拟服务
-- `fault`：删除当前虚拟服务
-- `stop`：删除当前虚拟服务
-- `sync`：检查本机是否真实持有 VIP；若持有则按配置同步 IPVS，若未持有则清理
-
-典型场景：
-
-- 由 `keepalived.conf` 中的 `notify_master` / `notify_backup` / `notify_fault` 调用
-- 也可以手工执行 `ipvs-state.sh sync` 做运行时同步
-
-## `notify_*` 钩子说明
-
-在 `keepalived/lb1/keepalived.conf` 和 `keepalived/lb2/keepalived.conf` 中，通常会看到：
+都会在主配置末尾通过：
 
 ```conf
-notify_master "/opt/lvs-router/bin/ipvs-state.sh master"
-notify_backup "/opt/lvs-router/bin/ipvs-state.sh backup"
-notify_fault "/opt/lvs-router/bin/ipvs-state.sh fault"
+include /opt/lvs-router/keepalived/virtual_server.conf
 ```
 
-它们的作用是：
+把 `virtual_server` / `real_server` / `TCP_CHECK` 直接交给 Keepalived 解析。
 
-- `notify_master`：节点进入 `MASTER` 时执行 `ipvs-state.sh master`
-- `notify_backup`：节点进入 `BACKUP` 时执行 `ipvs-state.sh backup`
-- `notify_fault`：节点进入 `FAULT` 时执行 `ipvs-state.sh fault`
+这意味着：
 
-当前仓库的设计里：
-
-- `Keepalived` 负责 VRRP 主备切换和 VIP 漂移
-- `ipvs-state.sh` 负责真正写入和清理内核中的 IPVS 规则
-
-因此，这些 `notify_*` 钩子就是 Keepalived 和 IPVS 规则同步之间的桥梁。
-
-### 可以删除吗
-
-可以删除，但不建议。
-
-如果删除：
-
-- 节点切到 `MASTER` 时，不会自动创建 IPVS 虚拟服务
-- 节点切到 `BACKUP` 或 `FAULT` 时，不会自动清理本机 IPVS 规则
-- 主备切换后，VIP 状态和 IPVS 转发表可能不同步
-
-换句话说，删除这些钩子后，Keepalived 仍然可以漂移 VIP，但本项目不会再自动同步 LVS/IPVS 规则。
-
-### 什么情况下才适合删除
-
-只有在以下情况之一时才适合：
-
-- 你不再使用 `ipvs-state.sh` 管理 IPVS
-- 你计划通过其他机制同步 IPVS 规则
-- 你只想保留 VRRP / VIP 漂移，而不让 Keepalived 参与 LVS 规则切换
-
-### 推荐做法
-
-推荐继续保留 `notify_*`，同时在需要时手工执行：
-
-```bash
-sudo /opt/lvs-router/bin/ipvs-state.sh sync
-```
-
-这样：
-
-- 正常主备切换时，规则会自动同步
-- 手工修改 `virtual_server.conf` 后，也可以主动做一次同步
+- `TCP_CHECK` 会由 Keepalived 原生执行
+- IPVS 虚拟服务和 Real Server 由 Keepalived 直接创建和维护
+- 不再通过 `notify_*` 钩子调用额外脚本去写同一组 IPVS 规则
 
 ### `start.sh`
 
@@ -162,17 +108,16 @@ sudo /opt/lvs-router/bin/ipvs-state.sh sync
 1. 创建日志目录和运行目录
 2. 执行 `keepalived -t -f "$KEEPALIVED_CONF"` 预检查
 3. 调用 `load-ipvs-modules.sh`
-4. 调用 `host-prep.sh`
-5. 调用 `ipvs-state.sh backup`
+4. 调用 `ipvsadm -C` 清空本机残留的 IPVS 规则
+5. 调用 `host-prep.sh`
 6. 后台启动 `router-id-server.sh`
 7. 后台启动 `keepalived -nl -f "$KEEPALIVED_CONF"`
 
 说明：
 
-- 先执行一次 `backup` 是为了避免启动瞬间误保留旧的 IPVS 规则
 - 会检查 PID 文件，避免重复启动
 - 启动前会先做 `keepalived -t` 校验，失败时直接退出
-- `keepalived.conf` 模板默认已启用 `enable_script_security` 并使用 `script_user root`
+- 启动时会先执行一次 `ipvsadm -C`，避免旧 IPVS 规则残留影响当前 VIP 的转发结果
 - `keepalived` 路径优先从 `PATH` 查找，也可通过 `KEEPALIVED_BIN` 指定
 
 ### `stop.sh`
@@ -188,8 +133,6 @@ sudo /opt/lvs-router/bin/ipvs-state.sh sync
 - 兜底清理匹配当前配置的 `keepalived` 残留进程
 - 删除 `/run/keepalived.pid`
 - 删除 PID 文件
-- 调用 `ipvs-state.sh stop`
-- 删除 `IPVS_STATE_FILE`
 
 ### `restart.sh`
 
@@ -211,7 +154,6 @@ sudo /opt/lvs-router/bin/ipvs-state.sh sync
 - 查看 `keepalived` 和 `router-id-server` 的 PID 文件状态
 - 如果进程仍存活，输出对应 PID 和命令行
 - 显示日志文件位置
-- 显示当前 `IPVS_STATE_FILE`
 - 输出 `ipvsadm -Ln`，便于排查当前内核 IPVS 规则
 
 典型场景：
@@ -233,7 +175,7 @@ sudo /opt/lvs-router/bin/ipvs-state.sh sync
 - `advert_int`
 - `authentication`
 - `virtual_ipaddress`
-- `notify_*` 钩子
+- 对 `virtual_server.conf` 的 `include` 路径
 
 推荐做法分两种：
 
@@ -250,7 +192,7 @@ sudo /opt/lvs-router/bin/start.sh
 
 - 会重新执行 `start.sh`
 - 会重新跑一遍主机网络准备和 Keepalived 启动流程
-- 适合修改了 `interface`、`VIP`、`notify_*` 等较关键配置时使用
+- 适合修改了 `interface`、`VIP`、`include` 路径等较关键配置时使用
 
 #### 方案 B：仅重载 Keepalived 进程
 
@@ -285,27 +227,24 @@ tail -n 50 /opt/lvs-router/logs/keepalived.log
 - `lb_kind`
 - `real_server` 列表
 - `weight`
+- `TCP_CHECK`
 
-这部分并不是由 Keepalived 持续自动下发，而是由 `ipvs-state.sh` 读取后写入内核 IPVS 表。
+这部分已经是 Keepalived 主配置的一部分，因为 `lb1/lb2` 的 `keepalived.conf` 会通过 `include` 直接加载它。
 
-当前实现里，最直接的热更新方法是在当前 MASTER 节点执行：
+当前实现里，最直接的热更新方法是让 Keepalived 重读配置：
 
 ```bash
-sudo /opt/lvs-router/bin/ipvs-state.sh sync
+sudo pkill -HUP keepalived
 ```
 
-作用：
-
-- 如果当前节点持有 VIP，就按新配置增删改 IPVS Real Server
-- 如果当前节点已经不是 MASTER，就自动清理本机旧规则
-
-因此，`virtual_server.conf` 修改后通常不需要主备切换，也不一定需要重启整套脚本拉起的进程。
+这样 Keepalived 会重新解析 `virtual_server.conf`，并按新配置更新 IPVS 服务和 `TCP_CHECK`。
 
 同步后建议检查：
 
 ```bash
 ipvsadm -Ln
 curl -s http://<LB_IP>:45555
+tail -n 50 /opt/lvs-router/logs/keepalived.log
 ```
 
 ## 推荐操作建议
@@ -318,7 +257,7 @@ curl -s http://<LB_IP>:45555
 如果你修改的是 `virtual_server.conf`：
 
 - 先同步配置到所有 LB 节点
-- 然后只在当前 MASTER 上执行 `sudo /opt/lvs-router/bin/ipvs-state.sh sync`
+- 然后对 Keepalived 执行 `HUP`，或直接执行 `stop.sh` 后再执行 `start.sh`
 
 如果你不确定当前改动属于哪一类：
 

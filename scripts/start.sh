@@ -45,7 +45,7 @@ is_running_pid_file() {
   return 1
 }
 
-mkdir -p "$LOG_DIR" "$RUN_DIR" "$RUN_DIR/ipvs-state" "$PID_DIR"
+mkdir -p "$LOG_DIR" "$RUN_DIR" "$PID_DIR"
 touch "$START_LOG" "$KEEPALIVED_LOG" "$ROUTER_ID_LOG"
 
 if is_running_pid_file "$KEEPALIVED_PID_FILE"; then
@@ -69,6 +69,13 @@ if [ -z "$KEEPALIVED_BIN" ]; then
   exit 1
 fi
 
+IPVSADM_BIN="${IPVSADM_BIN:-$(command -v ipvsadm 2>/dev/null || true)}"
+if [ -z "$IPVSADM_BIN" ]; then
+  log_line "ipvsadm binary not found in PATH"
+  echo "ipvsadm binary not found in PATH" >&2
+  exit 1
+fi
+
 log_line "starting lvs-router"
 log_line "running keepalived config check: $KEEPALIVED_BIN -t -f $KEEPALIVED_CONF"
 if ! "$KEEPALIVED_BIN" -t -f "$KEEPALIVED_CONF" >>"$KEEPALIVED_LOG" 2>&1; then
@@ -78,8 +85,9 @@ if ! "$KEEPALIVED_BIN" -t -f "$KEEPALIVED_CONF" >>"$KEEPALIVED_LOG" 2>&1; then
 fi
 
 "$BIN_DIR/load-ipvs-modules.sh" >>"$START_LOG" 2>&1
+log_line "clearing stale ipvs rules before keepalived startup"
+"$IPVSADM_BIN" -C >>"$START_LOG" 2>&1
 "$BIN_DIR/host-prep.sh" >>"$START_LOG" 2>&1
-"$BIN_DIR/ipvs-state.sh" backup >>"$START_LOG" 2>&1
 
 "$BIN_DIR/router-id-server.sh" >>"$ROUTER_ID_LOG" 2>&1 &
 router_pid=$!

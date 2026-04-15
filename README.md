@@ -3,9 +3,9 @@
 本项目提供一套可直接部署到 x86 Linux 宿主机的 `LVS-DR + Keepalived` 高可用负载均衡方案，默认按两台 LB 节点组织：`lb1` 和 `lb2`。
 
 整体设计保持不变：
-- `keepalived/lb1/keepalived.conf`、`keepalived/lb2/keepalived.conf` 负责 VRRP 和 VIP 漂移
-- `keepalived/virtual_server.conf` 描述 IPVS 虚拟服务和 Real Server
-- `lb/ipvs-state.sh` 由 `notify_master` / `notify_backup` / `notify_fault` 触发，在主备切换时写入或清理 IPVS 规则
+- `keepalived/lb1/keepalived.conf`、`keepalived/lb2/keepalived.conf` 负责 VRRP 和 VIP 漂移，并原生加载 `virtual_server.conf`
+- `keepalived/virtual_server.conf` 描述 IPVS 虚拟服务、Real Server 和 `TCP_CHECK`
+- `Keepalived` 直接负责下发 IPVS 规则和执行后端健康检查
 
 ## 架构说明
 
@@ -18,7 +18,7 @@
 ## 目录说明
 
 - `keepalived/`：VRRP 和虚拟服务配置
-- `lb/`：LVS 规则同步脚本和健康检查应答脚本
+- `lb/`：节点身份识别 HTTP 应答脚本
 - `scripts/`：裸机部署新增脚本
 - `packaging/centos-offline/`：CentOS / RHEL 系离线打包和安装脚本
 - `docs/centos-offline-install.md`：CentOS 完全离线安装说明
@@ -67,7 +67,7 @@
 - `virtual_ipaddress` 是否为你的业务 VIP
 - `router_id` 是否唯一
 - `priority` 是否符合主备顺序
-- `notify_*` 是否仍指向安装目录下的 `bin/ipvs-state.sh`
+- 主配置末尾是否保留 `include /opt/lvs-router/keepalived/virtual_server.conf`
 
 ### 2. 修改虚拟服务配置
 
@@ -78,6 +78,10 @@
 - `lb_kind` 选择转发模式，当前默认是 `DR`
 - `real_server` 列表改成真实 RS 地址和端口
 
+警告：如果你的拓扑是“LB 节点自己同时也是 `real_server`”，不要继续使用 `lb_algo rr`。
+在这种情况下，`rr` 可能把请求轮到另一台同样也在运行 Keepalived/IPVS 的 LB 上，形成递归转发，表现为间歇性失败或按固定节奏失败。
+当前模板默认改为 `lb_algo sh`，用源地址哈希降低这种递归转发风险；但更稳妥的拓扑仍然是让 LB 和真实 RS 分离。
+
 ### 3. 选择本机角色
 
 每台 LB 节点都需要一份环境文件，安装后固定放在安装目录下的 `lvs-router.env`。可以从仓库中的 `lvs-router.env.example` 复制生成。
@@ -87,9 +91,7 @@
 
 ```bash
 KEEPALIVED_CONF=/opt/lvs-router/keepalived/lb1/keepalived.conf
-VIRTUAL_SERVER_CONF=/opt/lvs-router/keepalived/virtual_server.conf
 HEALTHY_HTTP_PORT=45555
-IPVS_STATE_FILE=/opt/lvs-router/run/ipvs-state/current_service
 ROUTER_HTTP_DOCROOT=/opt/lvs-router/run/router-http
 IPVS_MODULES="ip_vs ip_vs_rr ip_vs_wrr ip_vs_sh"
 ```
@@ -139,10 +141,14 @@ sudo ./scripts/install-host-assets.sh
 例如输入 `1` 表示 `lb1`，输入 `2` 表示 `lb2`；如果存在 `lb3`、`lb4` 也会一并显示并可直接选择。直接回车时默认优先选择 `lb1`。
 在复制文件前，安装脚本会先检查运行依赖是否已经可用，包括 `keepalived`、`ip`、`ipvsadm`、`socat` 和 `modprobe`。
 如果你使用默认安装目录 `/opt/lvs-router`，安装脚本不会再错误改写成 `/opt/opt/lvs-router`。
-当前模板已启用 `enable_script_security` 并使用 `script_user root`，以允许 `notify_*` 调用本项目脚本。
+当前模板会在 `lb1` / `lb2` 主配置末尾通过 `include` 原生加载 `virtual_server.conf`，因此 `TCP_CHECK` 会由 Keepalived 直接执行。
+如果安装目录下已经存在上一版 `lvs-router`，安装脚本会先尝试执行旧的 `bin/stop.sh` 停掉旧进程，清空本机旧的 IPVS 规则，然后直接删除整个安装目录再重新安装。
 
 这一步会完成：
 
+- 停止安装目录下旧的 `lvs-router` 进程
+- 清空旧的 IPVS 规则
+- 删除整个旧安装目录并重建
 - 将项目脚本安装到安装目录下的 `bin`
 - 将 `keepalived/` 配置复制到安装目录下的 `keepalived`
 - 将环境文件样例安装到安装目录下的 `lvs-router.env`
@@ -158,7 +164,6 @@ sudo vi /opt/lvs-router/lvs-router.env
 至少确认以下变量：
 
 - `KEEPALIVED_CONF`
-- `VIRTUAL_SERVER_CONF`
 - `HEALTHY_HTTP_PORT`
 - `IPVS_MODULES`
 
@@ -207,10 +212,12 @@ script_user root
 统一由安装目录下的 `bin/start.sh` 拉起所有组件，启动流程如下：
 
 1. 调用安装目录下的 `bin/load-ipvs-modules.sh`
-2. 调用安装目录下的 `bin/host-prep.sh`
-3. 调用安装目录下的 `bin/ipvs-state.sh backup`
+2. 调用 `ipvsadm -C` 清空本机残留的 IPVS 规则
+3. 调用安装目录下的 `bin/host-prep.sh`
 4. 启动安装目录下的 `bin/router-id-server.sh`
 5. 启动 `keepalived -nl -f ${KEEPALIVED_CONF}`
+
+这样做是为了避免机器上遗留的旧 IPVS 规则影响当前 Keepalived 新下发的虚拟服务和轮询结果。
 
 日志统一输出到安装目录下的 `logs`：
 
@@ -243,6 +250,7 @@ ipvsadm -Ln
 ```
 
 应能看到 `virtual_server.conf` 中配置的 VIP、端口和 RS 列表。
+这些规则由 Keepalived 原生创建和维护。
 
 ### 4. 检查健康端口
 
@@ -281,24 +289,28 @@ sudo pkill -HUP keepalived
 
 ### 修改 `keepalived/virtual_server.conf`
 
-运行时的 IPVS 配置由 `ipvs-state.sh` 根据 `virtual_server.conf` 读取后写入内核。更新该文件后，不需要一定通过主备切换才能生效。
+这份文件已经被 `lb1/lb2` 的主配置通过 `include` 原生纳入 Keepalived。
+因此，更新其中的 `virtual_server`、`real_server`、`weight` 或 `TCP_CHECK` 后，需要让 Keepalived 重新加载配置。
 
-推荐在当前 MASTER 节点执行：
+推荐做法：
 
 ```bash
-sudo /opt/lvs-router/bin/ipvs-state.sh sync
+sudo pkill -HUP keepalived
 ```
 
-该命令会：
+如果你同时修改了 VIP、接口或其他更关键的宿主机相关配置，仍建议直接重启整套服务：
 
-- 当前节点持有 VIP 时，按新配置同步 IPVS 服务和 Real Server
-- 当前节点不持有 VIP 时，清理本机旧的 IPVS 规则
+```bash
+sudo /opt/lvs-router/bin/stop.sh
+sudo /opt/lvs-router/bin/start.sh
+```
 
-更新后建议检查：
+重载或重启后建议检查：
 
 ```bash
 ip addr show <你的网卡名>
 ipvsadm -Ln
+tail -n 50 /opt/lvs-router/logs/keepalived.log
 ```
 
 更完整的脚本说明和热更新建议见 `docs/script-reference-and-reload.md`。

@@ -160,19 +160,31 @@ KEEPALIVED_DIR="$INSTALL_ROOT/keepalived"
 ENV_FILE="$INSTALL_ROOT/lvs-router.env"
 RUN_DIR="$INSTALL_ROOT/run"
 
-cleanup_previous_install() {
-  rm -f "$BIN_DIR/ipvs-state.sh"
-  rm -f "$BIN_DIR/serve-router-id.sh"
-  rm -f "$BIN_DIR/host-prep.sh"
-  rm -f "$BIN_DIR/router-id-server.sh"
-  rm -f "$BIN_DIR/load-ipvs-modules.sh"
-  rm -f "$BIN_DIR/restart.sh"
-  rm -f "$BIN_DIR/start.sh"
-  rm -f "$BIN_DIR/status.sh"
-  rm -f "$BIN_DIR/stop.sh"
+stop_previous_runtime() {
+  STOP_SCRIPT="$BIN_DIR/stop.sh"
+  if [ -x "$STOP_SCRIPT" ]; then
+    echo "Stopping existing lvs-router runtime under $INSTALL_ROOT"
+    "$STOP_SCRIPT" >/dev/null 2>&1 || true
+  fi
 
-  rm -rf "$KEEPALIVED_DIR"
-  rm -f "$ENV_FILE"
+  if command -v ipvsadm >/dev/null 2>&1; then
+    echo "Clearing existing IPVS rules before reinstall"
+    ipvsadm -C >/dev/null 2>&1 || true
+  fi
+}
+
+cleanup_previous_install() {
+  case "$INSTALL_ROOT" in
+    ""|"/")
+      echo "Refusing to remove unsafe install root: $INSTALL_ROOT" >&2
+      exit 1
+      ;;
+  esac
+
+  if [ -e "$INSTALL_ROOT" ]; then
+    echo "Removing existing install root: $INSTALL_ROOT"
+    rm -rf "$INSTALL_ROOT"
+  fi
 }
 
 escape_replacement() {
@@ -182,10 +194,10 @@ escape_replacement() {
 ROOT_ESCAPED="$(escape_replacement "$INSTALL_ROOT")"
 DEFAULT_ROOT_ESCAPED="$(escape_replacement "$DEFAULT_INSTALL_ROOT")"
 
+stop_previous_runtime
 cleanup_previous_install
 
 install -d "$BIN_DIR" "$KEEPALIVED_DIR" "$RUN_DIR"
-install -m 0755 "$REPO_ROOT/lb/ipvs-state.sh" "$BIN_DIR/ipvs-state.sh"
 install -m 0755 "$REPO_ROOT/lb/serve-router-id.sh" "$BIN_DIR/serve-router-id.sh"
 install -m 0755 "$REPO_ROOT/scripts/host-prep.sh" "$BIN_DIR/host-prep.sh"
 install -m 0755 "$REPO_ROOT/scripts/router-id-server.sh" "$BIN_DIR/router-id-server.sh"

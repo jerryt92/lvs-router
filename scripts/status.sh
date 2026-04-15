@@ -13,7 +13,6 @@ fi
 LOG_DIR="${ROUTER_LOG_DIR:-$INSTALL_ROOT/logs}"
 RUN_DIR="${ROUTER_RUN_DIR:-$INSTALL_ROOT/run}"
 PID_DIR="$RUN_DIR/pids"
-STATE_FILE="${IPVS_STATE_FILE:-$INSTALL_ROOT/run/ipvs-state/current_service}"
 KEEPALIVED_PID_FILE="$PID_DIR/keepalived.pid"
 ROUTER_PID_FILE="$PID_DIR/router-id-server.pid"
 
@@ -59,14 +58,6 @@ echo "logs:"
 echo "  ${START_LOG:-$LOG_DIR/start.log}"
 echo "  ${KEEPALIVED_LOG:-$LOG_DIR/keepalived.log}"
 echo "  ${ROUTER_ID_LOG:-$LOG_DIR/router-id-server.log}"
-echo
-
-if [ -f "$STATE_FILE" ]; then
-  printf 'ipvs state file: %s\n' "$STATE_FILE"
-  awk '{ print "  " $0 }' "$STATE_FILE"
-else
-  printf 'ipvs state file: not present (%s)\n' "$STATE_FILE"
-fi
 echo
 
 if command -v ipvsadm >/dev/null 2>&1; then

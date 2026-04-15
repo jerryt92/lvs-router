@@ -15,7 +15,6 @@ LOG_DIR="${ROUTER_LOG_DIR:-$INSTALL_ROOT/logs}"
 RUN_DIR="${ROUTER_RUN_DIR:-$INSTALL_ROOT/run}"
 PID_DIR="$RUN_DIR/pids"
 START_LOG="${START_LOG:-$LOG_DIR/start.log}"
-STATE_FILE="${IPVS_STATE_FILE:-$INSTALL_ROOT/run/ipvs-state/current_service}"
 KEEPALIVED_PID_FILE="$PID_DIR/keepalived.pid"
 ROUTER_PID_FILE="$PID_DIR/router-id-server.pid"
 KEEPALIVED_RUNTIME_PID="${KEEPALIVED_RUNTIME_PID:-/run/keepalived.pid}"
@@ -85,12 +84,6 @@ if [ -f "$KEEPALIVED_RUNTIME_PID" ]; then
     kill -9 "$runtime_pid" 2>/dev/null || true
   fi
   rm -f "$KEEPALIVED_RUNTIME_PID"
-fi
-
-"$BIN_DIR/ipvs-state.sh" stop >>"$START_LOG" 2>&1 || true
-
-if [ -f "$STATE_FILE" ]; then
-  rm -f "$STATE_FILE"
 fi
 
 log_line "local stop sequence finished"
