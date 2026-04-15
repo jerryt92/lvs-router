@@ -2,15 +2,6 @@
 
 本项目提供一套可直接部署到 x86 Linux 宿主机的 `LVS-DR + Keepalived` 高可用负载均衡方案，默认按两台 LB 节点组织：`lb1` 和 `lb2`。
 
-整体设计保持不变：
-- `keepalived/lb1/keepalived.conf`、`keepalived/lb2/keepalived.conf` 只负责 VRRP 和 VIP 漂移
-- `keepalived/ipvs.conf` 负责加载 `virtual_server.conf`，由独立的 Keepalived 实例执行 `TCP_CHECK`
-- 当前持有 VIP 的节点会通过 `notify_master` 启动 IPVS/TCP_CHECK 实例；失去 VIP 时会停止该实例并清理规则
-
-这样拆分的原因是：本项目存在 `LB` 与 `real_server` 重合的场景。
-如果两台机器同时常驻带 `virtual_server` 的 Keepalived/IPVS 规则，那么请求在一台 LB 上完成第一次调度后，转发到另一台同样也持有这组规则的 LB 时，可能再次被当成 VIP 流量继续调度，进而出现递归转发、规则双活、回切后路径异常等问题。
-因此当前实现固定让两台节点都常驻 VRRP Keepalived，而只让当前持有 VIP 的节点额外运行 IPVS/TCP_CHECK Keepalived 实例。
-
 ## 架构说明
 
 - `lb1`：默认主节点，优先级更高
