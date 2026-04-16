@@ -1,0 +1,98 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.5.2 Chrome/142.0.7444.265 Electron/39.6.1 Safari/537.36" version="29.5.2">
+  <diagram id="lvs-failover-flow" name="LVS Failover Flow">
+    <mxGraphModel dx="1426" dy="773" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1280" pageHeight="960" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=20;fontStyle=1;" value="LVS-DR + Keepalived 倒换流程（默认 `LB_RS_TOPOLOGY=merged`）" vertex="1">
+          <mxGeometry height="30" width="780" x="250" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=12;fontColor=#666666;" value="VRRP Keepalived 常驻双机；IPVS/TCP_CHECK Keepalived 只在当前持有 VIP 的节点运行" vertex="1">
+          <mxGeometry height="20" width="800" x="240" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_left" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=16;fontStyle=1;verticalAlign=top;spacingTop=10;" value="原 MASTER（例如 lb1）" vertex="1">
+          <mxGeometry height="680" width="320" x="40" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_center" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=16;fontStyle=1;verticalAlign=top;spacingTop=10;" value="VRRP / VIP 事件" vertex="1">
+          <mxGeometry height="680" width="260" x="390" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_right" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=16;fontStyle=1;verticalAlign=top;spacingTop=10;" value="新 MASTER（例如 lb2）" vertex="1">
+          <mxGeometry height="680" width="320" x="680" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="left_start" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=13;" value="初始状态&#xa;- VRRP 实例处于 MASTER&#xa;- 持有 VIP&#xa;- 独立 IPVS/TCP_CHECK Keepalived 正在运行&#xa;- 本机保留 `virtual_server` 对应 IPVS 规则" vertex="1">
+          <mxGeometry height="110" width="260" x="70" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="center_trigger" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;" value="故障或切换触发&lt;br&gt;- 原 MASTER 宕机 / Keepalived 退出&lt;br&gt;- 网络异常导致 VRRP 广播丢失" vertex="1">
+          <mxGeometry height="100" width="200" x="420" y="230" as="geometry" />
+        </mxCell>
+        <mxCell id="left_demote" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=13;" value="原节点失去主角色&#xa;- 进入 BACKUP 或 FAULT&#xa;- 不应继续承担 director 身份" vertex="1">
+          <mxGeometry height="80" width="260" x="70" y="340" as="geometry" />
+        </mxCell>
+        <mxCell id="left_notify" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=13;" value="`notify_backup` / `notify_fault`&#xa;调用 `stop-ipvs-keepalived.sh`" vertex="1">
+          <mxGeometry height="70" width="260" x="70" y="450" as="geometry" />
+        </mxCell>
+        <mxCell id="left_cleanup" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=13;" value="脚本执行清理&#xa;- 停止独立 IPVS Keepalived 实例&#xa;- 清理 PID 文件&#xa;- 删除当前 `virtual_server.conf` 对应 IPVS 服务&#xa;- 避免非 VIP 节点继续保留 director 规则" vertex="1">
+          <mxGeometry height="120" width="260" x="70" y="550" as="geometry" />
+        </mxCell>
+        <mxCell id="right_start" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=13;" value="初始状态&#xa;- VRRP 实例处于 BACKUP&#xa;- 不持有 VIP&#xa;- 在默认 `merged` 模式下，不常驻 IPVS/TCP_CHECK 实例" vertex="1">
+          <mxGeometry height="90" width="260" x="710" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="right_detect" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=13;" value="检测到原 MASTER 超时&#xa;- VRRP 选举收敛&#xa;- 本机准备接管 VIP" vertex="1">
+          <mxGeometry height="80" width="260" x="710" y="340" as="geometry" />
+        </mxCell>
+        <mxCell id="right_master" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=13;" value="新节点进入 MASTER&#xa;- 绑定 VIP&#xa;- 对外成为新的活动 LB" vertex="1">
+          <mxGeometry height="70" width="260" x="710" y="450" as="geometry" />
+        </mxCell>
+        <mxCell id="right_notify" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=13;" value="`notify_master`&#xa;调用 `start-ipvs-keepalived.sh`" vertex="1">
+          <mxGeometry height="70" width="260" x="710" y="550" as="geometry" />
+        </mxCell>
+        <mxCell id="right_ipvs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=13;" value="脚本启动独立 IPVS/TCP_CHECK Keepalived 实例&#xa;- 加载 `keepalived/ipvs.conf`&#xa;- include `virtual_server.conf`&#xa;- 开始维护 IPVS 规则和 `TCP_CHECK` 状态" vertex="1">
+          <mxGeometry height="110" width="260" x="710" y="650" as="geometry" />
+        </mxCell>
+        <mxCell id="result" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;fontStyle=1;" value="倒换完成&#xa;- VIP 漂移到新 MASTER&#xa;- 只有当前 MASTER 持有 director 身份&#xa;- 旧 MASTER 已停止 IPVS/TCP_CHECK 并清掉规则&#xa;- 避免 LB/RS 合并场景下的递归转发与规则双活" vertex="1">
+          <mxGeometry height="150" width="200" x="420" y="800" as="geometry" />
+        </mxCell>
+        <mxCell id="note_separated" parent="1" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;" value="补充：`LB_RS_TOPOLOGY=separated` 时&#xa;- `start.sh` 启动阶段就会拉起独立 IPVS/TCP_CHECK 实例&#xa;- 节点进入 BACKUP / FAULT 时不会因为 VRRP 状态变化而停掉它&#xa;- 两台 LB 都可常驻 `virtual_server` 与 `TCP_CHECK`，切换时恢复更快&#xa;- 更适合 LB 与 RS 明确分离的架构" vertex="1">
+          <mxGeometry height="210" width="220" x="1030" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="left_start" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#6c8ebf;strokeWidth=2;" target="center_trigger">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="center_trigger" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#666666;strokeWidth=2;" target="left_demote">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="center_trigger" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#666666;strokeWidth=2;" target="right_detect">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="left_demote" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#6c8ebf;strokeWidth=2;" target="left_notify">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="left_notify" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#6c8ebf;strokeWidth=2;" target="left_cleanup">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="right_start" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#82b366;strokeWidth=2;" target="right_detect">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="840" y="280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="right_detect" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#82b366;strokeWidth=2;" target="right_master">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="right_master" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#82b366;strokeWidth=2;" target="right_notify">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="right_notify" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#82b366;strokeWidth=2;" target="right_ipvs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="left_cleanup" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#9673a6;strokeWidth=2;" target="result">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="right_ipvs" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#9673a6;strokeWidth=2;" target="result">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
