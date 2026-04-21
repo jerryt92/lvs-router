@@ -1,136 +1,227 @@
-# LVS-DR + Keepalived 路由集群部署与测试指南
+# LVS-DR + Keepalived Docker 部署指南
 
-本项目提供了一个基于 Docker Compose 的三节点路由器部署方案。底层采用 **LVS-DR（直接路由）** 模式，结合 **Keepalived** 实现高可用与流量调度。
+本项目提供一套基于 Docker 的 `LVS-DR + Keepalived` 高可用负载均衡方案。
+当前仓库已经收敛为单个容器服务 `lvs-router`，容器实际加载哪一份 `keepalived` 配置，由项目目录下映射进去的 `lvs-router.env` 决定。
 
-为了支持从局域网内其他物理设备直接访问 LVS 的 VIP，LB 使用 **host 网络**；**Keepalived / LVS 配置**在仓库 `keepalived/` 目录下（默认挂载进容器），按需直接编辑配置文件即可。Keepalived 通过 `notify_*` 钩子触发 `ipvs-state.sh`，在 VRRP 角色切换时同步 IPVS 规则。
-同时，支持**完全断网（内网隔离环境）下的快速迁移部署**机制。
+也就是说：
+
+- 容器名固定为 `lvs-router`
+- 运行时环境文件固定为项目目录下的 `lvs-router.env`
+- `keepalived/` 目录固定从当前项目目录挂载到容器内 `/opt/lvs-router/keepalived`
+- 切换 `lb1` / `lb2` 角色时，不需要改 Compose，只需要改 `lvs-router.env` 里的 `KEEPALIVED_CONF`
 
 ## 架构说明
 
-* **网关与调度（LB）**：包括 `lb1`、`lb2`、`lb3` 三个 Keepalived 节点。
-* **业务节点（Real Server）**：由你自有的物理机/虚拟机承担；在 `keepalived/virtual_server.conf` 中填写 `real_server` 地址与端口，并在各 RS 上自行完成 LVS-DR 所需配置（如 `lo` 上绑定 `VIP/32`、`arp_ignore`/`arp_announce`）。
+- `lb1`：默认主节点，优先级更高
+- `lb2`：默认备节点
+- `Real Server`：你自己的物理机或虚拟机，需自行完成 LVS-DR 所需配置，例如在 `lo` 上绑定 `VIP/32`，并设置 `arp_ignore` / `arp_announce`
 
-## 双端离线部署流程 (适用于 Ubuntu 虚拟机无外网的情景)
+## 目录说明
 
-由于 Linux 虚拟机在内网或者特殊安全策略下经常无法在线下载并拉取基础依赖（即 `apk add` 阶段遇到 `Permission denied` 或 SSL 错误），当前的部署架构已经全面替换为了静态**离线镜像**加载模式，剔除了在线动态 `build`：
+- `docker-compose.yml`：单容器启动入口，服务名固定为 `lvs-router`
+- `lvs-router.env`：当前节点运行时环境文件
+- `lvs-router.env.example`：环境文件模板
+- `keepalived/`：VRRP 与虚拟服务配置
+- `scripts/`：容器内实际执行的控制脚本
+- `lb/`：镜像构建文件与 HTTP 应答脚本
+- `build_and_export.sh`：离线镜像构建与导出脚本
 
-### 阶段 1：在你能联网的机器 (比如 Mac 宿主机) 上提前打包
-1. 保证你现在在有网络环境的主机上。
-2. 运行一键构建与打包脚本，它会将 `linux/amd64` 的 LB 镜像与测试用 curl 客户端镜像打成一整个 `.tar` 文件：
-   ```bash
-   chmod +x build_and_export.sh
-   ./build_and_export.sh
-   ```
-3. 等待完成后，你会在目录里发现一个 `lvs-offline-images.tar` 文件。
+## 部署前配置
 
-### 阶段 2：环境与 Keepalived 配置
-编辑 `.env` 中的 `PARENT_INTERFACE`、`VIP`、`RS1_IP`、`RS2_IP`，并**同步**修改 `lb1/keepalived.conf`、`lb2/keepalived.conf`、`lb3/keepalived.conf` 里的网卡与 VIP，以及 `keepalived/virtual_server.conf` 中的 VIP、RS 与端口（当前 compose 不把这些注入容器，以 `keepalived/` 文件为运行时生效配置）。
+### 1. 修改 VRRP 配置
 
-### 阶段 3：传输至目标隔离机器并启动服务
-将包含修改好的 `docker-compose.yml`、`.env`、`keepalived/` 目录以及你打好的 `lvs-offline-images.tar` 项目文件夹丢进你的离线目标 Linux (如 Ubuntu 虚拟机) 服务器内。
+检查：
 
-在那台断网机器上登录，并切入该目录执行：
+- `keepalived/lb1/keepalived.conf`
+- `keepalived/lb2/keepalived.conf`
+
+重点确认：
+
+- `interface` 是否为实际网卡名，例如 `ens18`
+- `virtual_ipaddress` 是否为你的业务 VIP
+- `router_id` 是否唯一
+- `priority` 是否符合主备顺序
+- `notify_*` 是否仍指向 `/opt/lvs-router/bin/start-ipvs-keepalived.sh` 和 `/opt/lvs-router/bin/stop-ipvs-keepalived.sh`
+
+### 2. 修改虚拟服务配置
+
+编辑 `keepalived/virtual_server.conf`：
+
+- `virtual_server <VIP> <PORT>` 改成实际业务 VIP 和端口
+- `lb_algo` 选择调度算法
+- `lb_kind` 选择转发模式，当前默认是 `DR`
+- `real_server` 列表改成真实 RS 地址和端口
+
+如果你的拓扑是“LB 节点自己同时也是 `real_server`”，建议不要继续使用 `lb_algo rr`，更适合改成 `lb_algo sh`，避免递归转发风险。
+
+### 3. 配置当前节点角色
+
+编辑项目目录下的 `lvs-router.env`。
+
+`lb1` 示例：
 
 ```bash
-# 1. 直接读取我们的离线环境塔包（脱离外网）
-docker load -i lvs-offline-images.tar 
+KEEPALIVED_CONF=/opt/lvs-router/keepalived/lb1/keepalived.conf
+HEALTHY_HTTP_PORT=45555
+ROUTER_HTTP_DOCROOT=/opt/lvs-router/run/router-http
+IPVS_MODULES="ip_vs ip_vs_rr ip_vs_wrr ip_vs_sh"
+LB_RS_TOPOLOGY=merged
+```
 
-# 2. 读取当前目录环境编排文件并在后台静默直接起飞（无需再跑 --build）
+如果当前机器要作为 `lb2` 运行，只需要把 `KEEPALIVED_CONF` 改成：
+
+```bash
+KEEPALIVED_CONF=/opt/lvs-router/keepalived/lb2/keepalived.conf
+```
+
+### 4. 选择拓扑模式
+
+`lvs-router.env` 中支持：
+
+- `LB_RS_TOPOLOGY=merged`
+- `LB_RS_TOPOLOGY=separated`
+
+`merged` 模式下，只有当前持有 VIP 的节点保留独立 IPVS Keepalived 实例。
+`separated` 模式下，两台 LB 都可常驻独立实例，以缩短切换恢复时间。
+
+## 在线启动
+
+在当前节点项目目录执行：
+
+```bash
+docker compose up -d --build
+```
+
+说明：
+
+- `docker-compose.yml` 已包含 `build` 配置，上述命令会先基于 `docker/Dockerfile` 构建本地镜像 `lvs-router:latest`
+- 在线构建阶段仍需访问镜像仓库以拉取基础镜像，例如 `alpine:latest`
+- 如果当前机器无法访问 Docker Hub，请改走下方“离线环境部署”
+
+容器名固定为：
+
+```bash
+lvs-router
+```
+
+容器启动时会执行与宿主机版一致的流程：
+
+1. 加载 IPVS 内核模块
+2. 清理残留 IPVS 规则
+3. 执行 `host-prep.sh`
+4. 启动 `router-id-server.sh`
+5. 启动 VRRP Keepalived
+6. 根据拓扑模式启动或停止独立的 IPVS Keepalived 实例
+
+## 离线环境部署
+
+在可联网机器上执行：
+
+```bash
+chmod +x build_and_export.sh
+./build_and_export.sh
+```
+
+会生成 `lvs-offline-images.tar`。
+
+将整个项目目录连同这个 tar 包复制到目标机器后，执行：
+
+```bash
+docker load -i lvs-offline-images.tar
 docker compose up -d
 ```
 
-## 测试与验证步骤
+离线模式下不需要再执行 `--build`，前提是目标机器已经成功导入 `lvs-router:latest` 等所需镜像。
 
-### 1. 验证 VIP 的初始挂载
-观察 VIP（与 `keepalived/*.conf` 中 `virtual_ipaddress` 一致）：
+## 验证步骤
+
+### 1. 检查容器状态
+
 ```bash
-# 将 ens18 换成本地 .env / keepalived 中的 PARENT_INTERFACE
-docker compose exec lb1 ip addr show ens18
+docker compose ps
+docker compose logs lvs-router
 ```
 
-### 2. 验证 LVS 规则配置
-查看针对业务映射所设的 DR 规则是否拉起：
+### 2. 检查 VIP
+
 ```bash
-docker compose exec lb1 ipvsadm -Ln
-# 应能看到针对 VIP 与业务端口的负载记录（与 keepalived/virtual_server.conf 一致）。
+docker compose exec lvs-router ip addr show <你的网卡名>
 ```
 
-### 2.1 修改 LVS 虚拟服务配置后的重载方式
+### 3. 检查 IPVS 规则
 
-运行时使用的 LVS 虚拟服务定义来自 `keepalived/virtual_server.conf`（以只读方式挂载到容器 `/etc/keepalived/virtual_server.conf`）。当前版本**不再在容器内轮询该文件**，而是：
-
-* 当 VRRP 角色发生变化（`MASTER` / `BACKUP` / `FAULT`）时，由 `keepalived.conf` 中的 `notify_*` 钩子调用 `ipvs-state.sh`；
-* `ipvs-state.sh` 会读取最新的 `virtual_server.conf`，并根据当前本机是否真正持有 VIP，决定是创建/更新 IPVS 规则，还是清理掉原有规则。
-
-因此，**修改 LVS 虚拟服务配置后的推荐重载姿势是：**
-
-1. 在宿主机上直接编辑仓库里的 `keepalived/virtual_server.conf`（确保最终内容同步到所有 LB 节点）。
-2. 在期望生效的 LB 节点上，通过让 VRRP 发生一次角色切换来触发重载：
-   * 最简单的方式是在当前 `MASTER` 所在机器执行：
-     ```bash
-     # 以 lb1 为例：停止当前 MASTER 上的 keepalived / 容器
-     docker compose stop lb1
-     ```
-   * 此时 VIP 会漂移到优先级更高的 BACKUP（例如 `lb2`），该节点在成为 `MASTER` 时会通过 `notify_master` 调用 `ipvs-state.sh master`，**重新按最新的 `virtual_server.conf` 写入 IPVS**。
-3. 如果你希望仍由原来的节点继续承担流量，可以在新 MASTER 上确认规则无误后，再重新启动原节点容器，让 VRRP 根据优先级自动漂移回去。
-
-> 简单理解：**“改好 `virtual_server.conf` → 通过一次 VRRP 漂移触发 `notify_*` → 新 MASTER 会按新配置重建 IPVS 规则。”** 无需进入容器手工执行 `ipvsadm`。
-
-### 3. 测试局域网络外部设备直接访问 LVS-DR
-现在只要你的处于同物理交换机/Wi-Fi 网络下的手机或是另一台电脑，直接在地址栏打开或发起：
 ```bash
-# 使用局域网其他机器
-for i in {1..5}; do curl -s http://<你的VIPIP>; sleep 1; done
+docker compose exec lvs-router ipvsadm -Ln
 ```
-如果内网设备无法访问，可在 `LB/RS` 节点所在同网段的任意机器上直接执行 `curl http://<你的VIPIP>` 排查连通性。
 
-### 4. 模拟倒换漂移容灾倒换 (Failover)
+### 4. 检查健康端口
+
 ```bash
-# 挂掉当前的 master 宿主挂节点 lb1 验证流量和权重切换
-docker compose stop lb1
-
-# 查看候补顺位的 lb2 重接替并验证它已经绑定上了 VIP 并写入了 IPVS（网卡名同 keepalived）
-docker compose exec lb2 ip addr show ens18
-docker compose exec lb2 ipvsadm -Ln
+curl -s http://<LB_IP>:45555
 ```
-此时可以再次测下业务的连续性，你之前分配给哪个 RS，由于哈希连续，应当保持不变的分发通道。
 
-## 清理环境
+应返回对应节点的 `router_id`。
 
-测试完毕后，在虚拟机节点上直接运行即重置：
+### 5. 检查 VIP 对外服务
+
+```bash
+curl -v http://<VIP>:<PORT>
+```
+
+## 运行时修改配置
+
+### 修改 `lvs-router.env`
+
+修改角色或拓扑模式后，重启容器：
+
+```bash
+docker compose restart
+```
+
+### 修改 `keepalived/lb1/keepalived.conf` 或 `keepalived/lb2/keepalived.conf`
+
+最稳妥的生效方式也是重启容器：
+
+```bash
+docker compose restart
+```
+
+### 修改 `keepalived/virtual_server.conf`
+
+推荐向当前节点的独立 IPVS 实例发送 `HUP`：
+
+```bash
+docker compose exec lvs-router sh -lc 'kill -HUP "$(cat /opt/lvs-router/run/pids/keepalived-ipvs.pid)"'
+```
+
+如果你同时改了 VIP、接口或其他关键 VRRP 配置，建议直接重启容器。
+
+## 故障切换验证
+
+在当前主节点执行：
+
+```bash
+docker compose stop
+```
+
+然后在备节点验证：
+
+```bash
+docker compose exec lvs-router ip addr show <你的网卡名>
+docker compose exec lvs-router ipvsadm -Ln
+curl -s http://<LB_IP>:45555
+```
+
+## 停止与清理
+
+停止当前节点服务：
+
+```bash
+docker compose stop
+```
+
+清理当前机器上的该项目容器：
+
 ```bash
 docker compose down
 ```
-
-## 多物理机部署（host 网络模式）
-
-当前 `docker-compose.yml` 仅包含 `lb1`、`lb2`、`lb3`，且均为 `network_mode: host`，应在各自 **LB 宿主机**上启动；真实 RS 不在 Compose 中，地址写在 `keepalived/virtual_server.conf`，RS 上需单独按 LVS-DR 要求配置。
-
-### 1) 在每台 LB 机器上启动对应服务
-
-把同一个项目文件夹复制到各 LB 节点，在每台机器分别执行（示例为仅拉起本机角色）：
-
-* 在 `lb1`（MASTER）机器上：
-  ```bash
-  docker compose -f docker-compose.yml up -d --build lb1
-  ```
-* 在 `lb2`（BACKUP，优先级 90）机器上：
-  ```bash
-  docker compose -f docker-compose.yml up -d --build lb2
-  ```
-* 在 `lb3`（BACKUP，优先级 80）机器上：
-  ```bash
-  docker compose -f docker-compose.yml up -d --build lb3
-  ```
-
-### 2) 需要提前在 `keepalived/` 核对的值
-* `interface` / `virtual_ipaddress`：与每台 LB 的物理网卡、共用 VIP 一致（三份 VRRP 配置需同步改 VIP 与网卡名时，可同时改 `keepalived.conf`、`lb2.conf`、`lb3.conf`）
-* `virtual_server` / `real_server`：与业务端口、真实 RS IP 一致（通常只改 `virtual_server.conf` 即可）
-
-### 3) 验证
-从任意能访问 `VIP` 的客户端机器访问：
-```bash
-curl -v http://<VIP>
-```
-
-可选地，停掉 `lb1` 再验证 VIP 漂移到 `lb2/lb3`，以及 LVS 转发是否继续正常。

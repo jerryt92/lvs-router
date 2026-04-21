@@ -1,11 +1,13 @@
 #!/bin/sh
 set -eu
 
-DEFAULT_CONF="${KEEPALIVED_CONF:-/etc/keepalived/lb1/keepalived.conf}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+INSTALL_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+DEFAULT_CONF="${KEEPALIVED_CONF:-$INSTALL_ROOT/keepalived/lb1/keepalived.conf}"
 CONF="${KEEPALIVED_CONF_PATH:-$DEFAULT_CONF}"
-VS_CONF="${VIRTUAL_SERVER_CONF:-/etc/keepalived/virtual_server.conf}"
+VS_CONF="${VIRTUAL_SERVER_CONF:-$INSTALL_ROOT/keepalived/virtual_server.conf}"
 STATE="${1:-backup}"
-STATE_FILE="${IPVS_STATE_FILE:-/run/ipvs-state/current_service}"
+STATE_FILE="${IPVS_STATE_FILE:-$INSTALL_ROOT/run/ipvs-state/current_service}"
 
 VIP="$(awk '/^[[:space:]]*virtual_server[[:space:]]+/ { print $2; exit }' "$VS_CONF" 2>/dev/null || true)"
 PORT="$(awk '/^[[:space:]]*virtual_server[[:space:]]+/ { print $3; exit }' "$VS_CONF" 2>/dev/null || true)"
