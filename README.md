@@ -14,7 +14,7 @@
 
 - `lb1`：默认主节点，优先级更高
 - `lb2`：默认备节点
-- `Real Server`：你自己的物理机或虚拟机，需自行完成 LVS-DR 所需配置，例如在 `lo` 上绑定 `VIP/32`，并设置 `arp_ignore` / `arp_announce`
+- `Real Server`：你自己的物理机或虚拟机，需自行完成 `LVS-DR` 所需配置，例如在 `lo` 上绑定 `VIP/32`，并设置 `arp_ignore` / `arp_announce`；如果采用本仓库的合并部署方式，则由 `keepalived.conf` 中的 `static_ipaddress` 托管 `lo` 上的 `VIP`
 
 ## 目录说明
 
