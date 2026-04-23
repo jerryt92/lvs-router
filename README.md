@@ -23,7 +23,7 @@
 
 - `lb1`：默认主节点，优先级更高
 - `lb2`：默认备节点
-- `Real Server`：你自己的物理机或虚拟机，需自行完成 `LVS-DR` 所需配置，例如在 `lo` 上绑定 `VIP/32`，并设置 `arp_ignore` / `arp_announce`
+- `Real Server`：你自己的物理机或虚拟机，需自行完成 `LVS-DR` 所需配置，例如在 `lo` 上绑定 `VIP/32`，并设置 `arp_ignore` / `arp_announce`；如果采用本仓库的合并部署方式，则由 `keepalived.conf` 中的 `static_ipaddress` 托管 `lo` 上的 `VIP`
 
 当前仓库没有现成的 `lb3` 配置。如果你需要三节点，可以在 `keepalived/lb2/keepalived.conf` 基础上复制出 `lb3` 并调整 `router_id`、`state`、`priority`。
 
@@ -275,7 +275,7 @@ sudo /opt/lvs-router/bin/status.sh
 
 1. 调用 `bin/load-ipvs-modules.sh`
 2. 调用 `ipvsadm -C` 清空本机残留的 IPVS 规则
-3. 调用 `bin/host-prep.sh`
+3. 调用 `bin/host-prep.sh`，写入 `router_id` 并应用 LVS-DR 所需 `sysctl`
 4. 启动 `bin/router-id-server.sh`
 5. 启动 VRRP Keepalived：`keepalived -nl -f ${KEEPALIVED_CONF}`
 6. 节点切到 `MASTER` 后，由 `notify_master` 调用 `start-ipvs-keepalived.sh`
@@ -358,7 +358,7 @@ sudo /opt/lvs-router/bin/stop.sh
 sudo /opt/lvs-router/bin/start.sh
 ```
 
-如果只是希望 Keepalived 进程重读配置，也可以发送 `HUP`，但这种方式不会重新执行 `host-prep.sh`：
+如果只是希望 Keepalived 进程重读配置，也可以发送 `HUP`。这种方式虽然不会重新执行 `host-prep.sh`，但会让 Keepalived 重新收敛它托管的 `virtual_ipaddress` 和 `static_ipaddress`：
 
 ```bash
 sudo pkill -HUP keepalived

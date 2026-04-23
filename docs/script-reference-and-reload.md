@@ -23,11 +23,11 @@
 
 用途：
 
-- 从 `KEEPALIVED_CONF` 指向的 `keepalived.conf` 中读取 `VIP`、网卡名和 `router_id`
+- 从 `KEEPALIVED_CONF` 指向的 `keepalived.conf` 中读取网卡名和 `router_id`
 - 将 `router_id` 写入 `ROUTER_HTTP_DOCROOT/router_id`
-- 在本机 `lo` 上添加 `VIP/32`
 - 设置 `arp_ignore` / `arp_announce`，避免 LVS-DR 模式下错误响应 ARP
 - 设置 `net.ipv4.vs.expire_nodest_conn=1` 和 `net.ipv4.vs.expire_quiescent_template=1`，让失效 RS 的旧连接和模板更快过期
+- `lo` 上的 `VIP/32` 改由 `keepalived.conf` 中的 `static_ipaddress` 管理
 
 典型场景：
 
@@ -139,7 +139,7 @@
 2. 执行 `keepalived -t -f "$KEEPALIVED_CONF"` 预检查
 3. 调用 `load-ipvs-modules.sh`
 4. 调用 `ipvsadm -C` 清空本机残留的 IPVS 规则
-5. 调用 `host-prep.sh`
+5. 调用 `host-prep.sh`，写入 `router_id` 并应用 LVS-DR 所需 `sysctl`
 6. 调用 `stop-ipvs-keepalived.sh --force`，确保当前节点启动前没有残留的 IPVS Keepalived 实例
 7. 后台启动 `router-id-server.sh`
 8. 后台启动 VRRP Keepalived：`keepalived -nl -f "$KEEPALIVED_CONF"`
@@ -243,6 +243,7 @@ sudo pkill -HUP keepalived
 注意：
 
 - 这种方式只会重载 Keepalived 配置，不会重新执行 `host-prep.sh`
+- 但 `virtual_ipaddress` 和 `static_ipaddress` 仍会由 Keepalived 在 reload 后重新收敛
 - 如果你修改的是 `VIP`、接口相关设置，单独 reload 后最好补做一次状态校验
 - 如果你的机器上有多个 Keepalived 实例，不建议直接用 `pkill`，应改为向目标 PID 发送 `HUP`
 
